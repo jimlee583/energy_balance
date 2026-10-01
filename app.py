@@ -787,106 +787,199 @@ def _render_seasonal(cfg: SimulationConfig) -> None:
 
 def _arrow3d(
     label: str,
-    vector: np.ndarray,
+    start: np.ndarray,
+    direction: np.ndarray,
+    length: float,
     color: str,
     *,
     dashed: bool = False,
-    head_size: float = 0.08,
-    text_scale: float = 1.1,
 ) -> list[go.BaseTraceType]:
-    """Return a Plotly line + cone pair that renders ``vector`` as a labeled 3D arrow.
+    """Render a labeled 3D arrow of length ``length`` starting at ``start``.
 
-    ``vector`` is expected to be unit-length and emanates from the origin.
+    ``direction`` must be a unit vector. The returned traces are a line segment
+    plus a cone arrowhead at the tip.
     """
-    v = np.asarray(vector, dtype=float)
-    if np.linalg.norm(v) < 1e-9:
+    s = np.asarray(start, dtype=float)
+    d = np.asarray(direction, dtype=float)
+    norm = np.linalg.norm(d)
+    if norm < 1e-9:
         return []
+    d = d / norm
+    tip = s + d * length
     line = go.Scatter3d(
-        x=[0.0, v[0]],
-        y=[0.0, v[1]],
-        z=[0.0, v[2]],
+        x=[s[0], tip[0]],
+        y=[s[1], tip[1]],
+        z=[s[2], tip[2]],
         mode="lines",
         line=dict(color=color, width=6, dash="dash" if dashed else "solid"),
         name=label,
-        hovertemplate=f"<b>{label}</b><br>ECI: ({v[0]:.3f}, {v[1]:.3f}, {v[2]:.3f})<extra></extra>",
+        hovertemplate=f"<b>{label}</b><br>Dir: ({d[0]:.2f}, {d[1]:.2f}, {d[2]:.2f})<extra></extra>",
         showlegend=True,
     )
     cone = go.Cone(
-        x=[v[0]],
-        y=[v[1]],
-        z=[v[2]],
-        u=[v[0]],
-        v=[v[1]],
-        w=[v[2]],
+        x=[tip[0]], y=[tip[1]], z=[tip[2]],
+        u=[d[0]], v=[d[1]], w=[d[2]],
         sizemode="absolute",
-        sizeref=head_size,
+        sizeref=max(length * 0.2, 1e-3),
         anchor="tip",
         colorscale=[[0, color], [1, color]],
         showscale=False,
         showlegend=False,
         hoverinfo="skip",
     )
-    tip = v * text_scale
-    text = go.Scatter3d(
-        x=[tip[0]],
-        y=[tip[1]],
-        z=[tip[2]],
-        mode="text",
-        text=[label],
-        textfont=dict(color=color, size=12),
-        showlegend=False,
-        hoverinfo="skip",
+    return [line, cone]
+
+
+def _unit_cube() -> tuple[np.ndarray, np.ndarray]:
+    """Return (vertices, triangle indices) for a unit cube centered at the origin."""
+    v = np.array(
+        [
+            [-1, -1, -1],
+            [+1, -1, -1],
+            [+1, +1, -1],
+            [-1, +1, -1],
+            [-1, -1, +1],
+            [+1, -1, +1],
+            [+1, +1, +1],
+            [-1, +1, +1],
+        ],
+        dtype=float,
+    ) * 0.5
+    tris = np.array(
+        [
+            [0, 1, 2], [0, 2, 3],   # -Z
+            [4, 6, 5], [4, 7, 6],   # +Z
+            [0, 3, 7], [0, 7, 4],   # -X
+            [1, 5, 6], [1, 6, 2],   # +X
+            [0, 4, 5], [0, 5, 1],   # -Y
+            [2, 6, 7], [2, 7, 3],   # +Y
+        ]
     )
-    return [line, cone, text]
+    return v, tris
+
+
+def _box_mesh(
+    center_eci: np.ndarray,
+    rot_body_to_eci: np.ndarray,
+    size_body: tuple[float, float, float],
+    offset_body: tuple[float, float, float],
+    color: str,
+    name: str,
+    *,
+    showlegend: bool = False,
+    opacity: float = 1.0,
+) -> go.Mesh3d:
+    """Build an arbitrarily sized box in body coords, rotated and translated to ECI."""
+    verts, tris = _unit_cube()
+    scale = np.array(size_body, dtype=float)
+    offset = np.array(offset_body, dtype=float)
+    verts_body = verts * scale + offset
+    verts_eci = (rot_body_to_eci @ verts_body.T).T + np.asarray(center_eci, dtype=float)
+    return go.Mesh3d(
+        x=verts_eci[:, 0], y=verts_eci[:, 1], z=verts_eci[:, 2],
+        i=tris[:, 0], j=tris[:, 1], k=tris[:, 2],
+        color=color, opacity=opacity, flatshading=True,
+        name=name, hoverinfo="name", showlegend=showlegend,
+    )
+
+
+def _satellite_mesh(
+    center_eci: np.ndarray,
+    rot_body_to_eci: np.ndarray,
+    scale: float,
+) -> list[go.BaseTraceType]:
+    """Return a notional box-bus-plus-two-wings satellite rotated into ECI.
+
+    ``scale`` is roughly the half-size of the bus in km. Wings extend from the +/-Y
+    faces of the bus and are rendered as thin flat boxes.
+    """
+    traces: list[go.BaseTraceType] = []
+    s = float(scale)
+    # Bus: cube of side 2*s, centered on the satellite.
+    traces.append(
+        _box_mesh(
+            center_eci, rot_body_to_eci,
+            size_body=(2 * s, 2 * s, 2 * s), offset_body=(0.0, 0.0, 0.0),
+            color="#8d99a6", name="Bus", showlegend=True,
+        )
+    )
+    # Wings: thin flat boxes along +Y and -Y, each about 3x the bus width.
+    wing_x = 4 * s     # along body X
+    wing_y = 3 * s     # extent along Y past the bus face
+    wing_z = 0.1 * s   # thin in Z
+    wing_offset = s + wing_y / 2.0
+    for side, label in [(+1, "Wing +Y"), (-1, "Wing -Y")]:
+        traces.append(
+            _box_mesh(
+                center_eci, rot_body_to_eci,
+                size_body=(wing_x, wing_y, wing_z),
+                offset_body=(0.0, side * wing_offset, 0.0),
+                color="#1f3a5f", name=label, opacity=0.95,
+            )
+        )
+    return traces
 
 
 def _pick_default_time_index(df: pd.DataFrame) -> int:
-    """Return the first index that is comfortably in sunlight (so Sun arrow is meaningful)."""
+    """Return the first index that is comfortably in sunlight."""
     sunlit = df.index[df["illumination"] > 0.99]
     if len(sunlit):
         return int(sunlit[0])
-    # Fall back to the brightest step.
     return int(df["illumination"].idxmax())
 
 
 def _render_frames(df: pd.DataFrame) -> None:
     cfg: SimulationConfig = df.attrs["config"]
     st.caption(
-        "Snapshot of the satellite's coordinate frames at a chosen moment. All arrows are unit "
-        "vectors drawn from the satellite origin; only their directions are meaningful. "
-        "Body axes come from the attitude mode, nadir points to the Earth's center, velocity is "
-        "the inertial velocity direction, orbit normal is r x v, and the Sun arrow uses the "
-        "low-precision solar ephemeris. Panel normals are the body-frame normals rotated into "
-        "ECI (for 2-axis tracking panels, the Sun direction is used)."
+        "Earth-centered scene showing the orbit, a notional satellite (box bus plus two wings), "
+        "and the direction to the Sun. Earth stays at the origin but is drawn smaller than true "
+        "scale, so a low orbit and the +X, +Y, and +Z body axes are not buried in the globe. "
+        "The satellite geometry is schematic and not to scale; it rotates with the chosen "
+        "attitude mode. The Sun marker is placed along the true Sun direction but at a "
+        "dramatically reduced distance so everything is visible. Scrub the time slider to watch "
+        "the satellite move along its orbit and see how its body axes line up with Earth and Sun."
     )
 
-    # Time picker: quick preset + fine slider.
+    # Time picker: quick preset + fine slider wired through session state so the
+    # quick pick actually jumps the slider.
     n = len(df)
-    default_idx = _pick_default_time_index(df)
     quick = st.radio(
         "Quick pick",
         options=["Default (first sunlit)", "Start", "Mid-sunlit", "Mid-eclipse", "End"],
         horizontal=True,
         index=0,
+        key="frames_quick",
     )
-    if quick == "Start":
-        default_idx = 0
-    elif quick == "End":
-        default_idx = n - 1
-    elif quick == "Mid-sunlit":
-        sunlit = df.index[df["illumination"] > 0.99]
-        default_idx = int(sunlit[len(sunlit) // 2]) if len(sunlit) else default_idx
-    elif quick == "Mid-eclipse":
-        eclipse = df.index[df["illumination"] < 0.01]
-        default_idx = int(eclipse[len(eclipse) // 2]) if len(eclipse) else default_idx
+
+    def _resolve_default() -> int:
+        if quick == "Start":
+            return 0
+        if quick == "End":
+            return n - 1
+        if quick == "Mid-sunlit":
+            sunlit = df.index[df["illumination"] > 0.99]
+            return int(sunlit[len(sunlit) // 2]) if len(sunlit) else _pick_default_time_index(df)
+        if quick == "Mid-eclipse":
+            eclipse = df.index[df["illumination"] < 0.01]
+            return int(eclipse[len(eclipse) // 2]) if len(eclipse) else _pick_default_time_index(df)
+        return _pick_default_time_index(df)
+
+    # Keep the slider's session-state in sync with quick picks and simulation length.
+    if "frames_idx" not in st.session_state:
+        st.session_state.frames_idx = _resolve_default()
+    if st.session_state.get("frames_quick_prev") != quick:
+        st.session_state.frames_quick_prev = quick
+        st.session_state.frames_idx = _resolve_default()
+    # Clamp if the simulation length changed under us.
+    st.session_state.frames_idx = int(min(max(st.session_state.frames_idx, 0), n - 1))
 
     idx = st.slider(
         "Time step",
         min_value=0,
         max_value=n - 1,
-        value=int(default_idx),
         step=1,
-        help="Scrub through the simulation. Vectors update live.",
+        key="frames_idx",
+        help="Scrub through the simulation. The satellite and vectors update live.",
     )
     ts = df["timestamp_utc"].iloc[idx]
     illum = float(df["illumination"].iloc[idx])
@@ -896,80 +989,126 @@ def _render_frames(df: pd.DataFrame) -> None:
     )
 
     cols = st.columns(3)
-    show_body = cols[0].checkbox("Body axes (+X red, +Y green, +Z blue)", value=True)
-    show_sun = cols[0].checkbox("Sun direction (gold)", value=True)
-    show_nadir = cols[1].checkbox("Nadir (brown)", value=True)
-    show_velocity = cols[1].checkbox("Velocity (teal)", value=True)
-    show_normal = cols[2].checkbox("Orbit normal (purple)", value=True)
-    show_panels = cols[2].checkbox("Panel normals (orange)", value=True)
+    show_orbit = cols[0].checkbox("Orbit trajectory", value=True)
+    show_sun = cols[0].checkbox("Sun marker and direction", value=True)
+    show_body_axes = cols[1].checkbox("Body axes on satellite", value=True)
+    show_nadir = cols[1].checkbox("Nadir arrow", value=False)
+    show_velocity = cols[2].checkbox("Velocity arrow", value=False)
+    show_normal = cols[2].checkbox("Orbit normal arrow", value=False)
 
-    # Gather vectors at the chosen step.
-    r_eci = np.asarray(df.attrs["r_eci_km"][idx])
+    # Vectors and attitude at the chosen step.
+    r_all = np.asarray(df.attrs["r_eci_km"])
+    r_eci = r_all[idx]
     v_eci = np.asarray(df.attrs["v_eci_km_s"][idx])
     sun_eci = np.asarray(df.attrs["sun_eci_km"][idx])
     u_sun = sun_eci / np.linalg.norm(sun_eci)
     nadir = -r_eci / np.linalg.norm(r_eci)
     v_hat = v_eci / np.linalg.norm(v_eci)
-    h = np.cross(r_eci, v_eci)
-    h_hat = h / np.linalg.norm(h)
+    h_hat = np.cross(r_eci, v_eci)
+    h_hat = h_hat / np.linalg.norm(h_hat)
 
     rot = body_to_eci(cfg.attitude, r_eci[None, :], v_eci[None, :], u_sun[None, :])[0]
     body_x = rot[:, 0]
     body_y = rot[:, 1]
     body_z = rot[:, 2]
 
-    traces: list[go.BaseTraceType] = []
-    if show_body:
-        traces += _arrow3d("+X body", body_x, "#d62728")
-        traces += _arrow3d("+Y body", body_y, "#2ca02c")
-        traces += _arrow3d("+Z body", body_z, "#1f77b4")
-    if show_sun:
-        traces += _arrow3d(
-            "Sun", u_sun, "#ffb000", dashed=illum < 0.99
-        )
-    if show_nadir:
-        traces += _arrow3d("Nadir", nadir, "#8c564b")
-    if show_velocity:
-        traces += _arrow3d("Velocity", v_hat, "#17becf")
-    if show_normal:
-        traces += _arrow3d("Orbit normal", h_hat, "#9467bd")
-    if show_panels:
-        for panel in cfg.solar_array.panels:
-            if panel.mounting is PanelMounting.TWO_AXIS:
-                normal_eci = u_sun
-                label = f"{panel.name} (2-axis -> Sun)"
-            else:
-                normal_body = np.asarray(panel.normal_body, dtype=float)
-                normal_body = normal_body / np.linalg.norm(normal_body)
-                normal_eci = rot @ normal_body
-            traces += _arrow3d(label if panel.mounting is PanelMounting.TWO_AXIS else panel.name,
-                               normal_eci, "#ff7f0e", head_size=0.06)
+    # Visual scales (km). Notional satellite size and Sun distance are chosen so
+    # that everything stays visible for both LEO and GEO orbits.
+    r_mag = np.linalg.norm(r_all, axis=1)
+    orbit_radius = float(np.max(r_mag))
+    orbit_min = float(np.min(r_mag))
+    sat_scale = max(0.04 * orbit_radius, 250.0)
+    arrow_len = 3.0 * sat_scale
+    sun_distance = 2.0 * orbit_radius
+    # Draw Earth smaller than true scale and centered at the origin. A real Earth
+    # nearly fills a LEO orbit, which hides the trajectory and the body axes.
+    # Cap at the true radius so higher orbits are not enlarged.
+    earth_visual_km = min(float(R_EARTH_KM), 0.40 * orbit_min)
 
-    # Dim origin marker to anchor the eye.
+    traces: list[go.BaseTraceType] = []
+
+    # Earth sphere (schematic, centered on the ECI origin).
+    phi = np.linspace(0, np.pi, 25)
+    theta = np.linspace(0, 2 * np.pi, 40)
+    th_grid, ph_grid = np.meshgrid(theta, phi)
+    xe = earth_visual_km * np.sin(ph_grid) * np.cos(th_grid)
+    ye = earth_visual_km * np.sin(ph_grid) * np.sin(th_grid)
+    ze = earth_visual_km * np.cos(ph_grid)
     traces.append(
-        go.Scatter3d(
-            x=[0.0], y=[0.0], z=[0.0], mode="markers",
-            marker=dict(size=4, color="black"),
-            name="Satellite", hoverinfo="name", showlegend=False,
+        go.Surface(
+            x=xe, y=ye, z=ze, colorscale="Blues", opacity=0.6, showscale=False,
+            name="Earth (not to scale)", hoverinfo="name",
         )
     )
 
+    # Orbit trajectory (one revolution).
+    period_s = df.attrs.get("period_s", 90.0 * 60.0)
+    orbit_mask = df["time_s"].values <= period_s * 1.02
+    r_orbit = r_all[orbit_mask]
+    if show_orbit and len(r_orbit) > 1:
+        traces.append(
+            go.Scatter3d(
+                x=r_orbit[:, 0], y=r_orbit[:, 1], z=r_orbit[:, 2],
+                mode="lines", line=dict(color="orange", width=4),
+                name="Orbit (1 revolution)", hoverinfo="name",
+            )
+        )
+
+    # Notional satellite geometry at the current step.
+    traces += _satellite_mesh(r_eci, rot, sat_scale)
+
+    # Body axes and (optional) local-frame arrows anchored on the satellite.
+    if show_body_axes:
+        traces += _arrow3d("+X body", r_eci, body_x, arrow_len, "#d62728")
+        traces += _arrow3d("+Y body", r_eci, body_y, arrow_len, "#2ca02c")
+        traces += _arrow3d("+Z body", r_eci, body_z, arrow_len, "#1f77b4")
+    if show_nadir:
+        traces += _arrow3d("Nadir", r_eci, nadir, arrow_len, "#8c564b")
+    if show_velocity:
+        traces += _arrow3d("Velocity", r_eci, v_hat, arrow_len, "#17becf")
+    if show_normal:
+        traces += _arrow3d("Orbit normal", r_eci, h_hat, arrow_len, "#9467bd")
+
+    # Sun marker along the Sun direction (not to scale).
+    if show_sun:
+        sun_pos = u_sun * sun_distance
+        traces.append(
+            go.Scatter3d(
+                x=[0.0, sun_pos[0]], y=[0.0, sun_pos[1]], z=[0.0, sun_pos[2]],
+                mode="lines",
+                line=dict(color="goldenrod", width=3, dash="dot"),
+                name="Sun direction (not to scale)", hoverinfo="name",
+            )
+        )
+        sun_r = sat_scale * 2.5
+        xs = sun_pos[0] + sun_r * np.sin(ph_grid) * np.cos(th_grid)
+        ys = sun_pos[1] + sun_r * np.sin(ph_grid) * np.sin(th_grid)
+        zs = sun_pos[2] + sun_r * np.cos(ph_grid)
+        traces.append(
+            go.Surface(
+                x=xs, y=ys, z=zs,
+                colorscale=[[0, "gold"], [1, "yellow"]],
+                opacity=1.0, showscale=False,
+                name="Sun (not to scale)", hoverinfo="name",
+            )
+        )
+
     fig = go.Figure(data=traces)
-    axis_range = [-1.3, 1.3]
+    axis_half = sun_distance * 1.15 if show_sun else orbit_radius * 1.3
     fig.update_layout(
         scene=dict(
             aspectmode="cube",
-            xaxis=dict(range=axis_range, title="ECI X"),
-            yaxis=dict(range=axis_range, title="ECI Y"),
-            zaxis=dict(range=axis_range, title="ECI Z"),
+            xaxis=dict(title="ECI X (km)", range=[-axis_half, axis_half]),
+            yaxis=dict(title="ECI Y (km)", range=[-axis_half, axis_half]),
+            zaxis=dict(title="ECI Z (km)", range=[-axis_half, axis_half]),
         ),
-        height=600,
+        height=650,
         margin=dict(l=0, r=0, t=10, b=0),
         legend=dict(orientation="h"),
     )
     st.plotly_chart(fig, width='stretch')
 
-    # Numeric table.
+    # Numeric values table (unit vectors in ECI).
     rows: list[dict[str, object]] = []
 
     def _row(label: str, vec: np.ndarray, body_frame: str = "") -> None:
@@ -1002,7 +1141,7 @@ def _render_frames(df: pd.DataFrame) -> None:
             )
             _row(f"{panel.name} normal", normal_eci, face_label)
 
-    st.subheader("Numeric values")
+    st.subheader("Numeric values (unit vectors in ECI)")
     st.dataframe(pd.DataFrame(rows), width='stretch', hide_index=True)
 
 

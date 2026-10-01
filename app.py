@@ -35,6 +35,7 @@ from energy_balance import (
     preset_configs,
     run_simulation,
 )
+from energy_balance.attitude import body_to_eci
 from energy_balance.config import BODY_FACES, OrbitSpec
 from energy_balance.eclipse import R_EARTH_KM
 from energy_balance.orbit import OrbitState, propagate_orbit, sun_sync_inclination_deg
@@ -780,6 +781,232 @@ def _render_seasonal(cfg: SimulationConfig) -> None:
 
 
 # --------------------------------------------------------------------------------------
+# Frames tab helpers
+# --------------------------------------------------------------------------------------
+
+
+def _arrow3d(
+    label: str,
+    vector: np.ndarray,
+    color: str,
+    *,
+    dashed: bool = False,
+    head_size: float = 0.08,
+    text_scale: float = 1.1,
+) -> list[go.BaseTraceType]:
+    """Return a Plotly line + cone pair that renders ``vector`` as a labeled 3D arrow.
+
+    ``vector`` is expected to be unit-length and emanates from the origin.
+    """
+    v = np.asarray(vector, dtype=float)
+    if np.linalg.norm(v) < 1e-9:
+        return []
+    line = go.Scatter3d(
+        x=[0.0, v[0]],
+        y=[0.0, v[1]],
+        z=[0.0, v[2]],
+        mode="lines",
+        line=dict(color=color, width=6, dash="dash" if dashed else "solid"),
+        name=label,
+        hovertemplate=f"<b>{label}</b><br>ECI: ({v[0]:.3f}, {v[1]:.3f}, {v[2]:.3f})<extra></extra>",
+        showlegend=True,
+    )
+    cone = go.Cone(
+        x=[v[0]],
+        y=[v[1]],
+        z=[v[2]],
+        u=[v[0]],
+        v=[v[1]],
+        w=[v[2]],
+        sizemode="absolute",
+        sizeref=head_size,
+        anchor="tip",
+        colorscale=[[0, color], [1, color]],
+        showscale=False,
+        showlegend=False,
+        hoverinfo="skip",
+    )
+    tip = v * text_scale
+    text = go.Scatter3d(
+        x=[tip[0]],
+        y=[tip[1]],
+        z=[tip[2]],
+        mode="text",
+        text=[label],
+        textfont=dict(color=color, size=12),
+        showlegend=False,
+        hoverinfo="skip",
+    )
+    return [line, cone, text]
+
+
+def _pick_default_time_index(df: pd.DataFrame) -> int:
+    """Return the first index that is comfortably in sunlight (so Sun arrow is meaningful)."""
+    sunlit = df.index[df["illumination"] > 0.99]
+    if len(sunlit):
+        return int(sunlit[0])
+    # Fall back to the brightest step.
+    return int(df["illumination"].idxmax())
+
+
+def _render_frames(df: pd.DataFrame) -> None:
+    cfg: SimulationConfig = df.attrs["config"]
+    st.caption(
+        "Snapshot of the satellite's coordinate frames at a chosen moment. All arrows are unit "
+        "vectors drawn from the satellite origin; only their directions are meaningful. "
+        "Body axes come from the attitude mode, nadir points to the Earth's center, velocity is "
+        "the inertial velocity direction, orbit normal is r x v, and the Sun arrow uses the "
+        "low-precision solar ephemeris. Panel normals are the body-frame normals rotated into "
+        "ECI (for 2-axis tracking panels, the Sun direction is used)."
+    )
+
+    # Time picker: quick preset + fine slider.
+    n = len(df)
+    default_idx = _pick_default_time_index(df)
+    quick = st.radio(
+        "Quick pick",
+        options=["Default (first sunlit)", "Start", "Mid-sunlit", "Mid-eclipse", "End"],
+        horizontal=True,
+        index=0,
+    )
+    if quick == "Start":
+        default_idx = 0
+    elif quick == "End":
+        default_idx = n - 1
+    elif quick == "Mid-sunlit":
+        sunlit = df.index[df["illumination"] > 0.99]
+        default_idx = int(sunlit[len(sunlit) // 2]) if len(sunlit) else default_idx
+    elif quick == "Mid-eclipse":
+        eclipse = df.index[df["illumination"] < 0.01]
+        default_idx = int(eclipse[len(eclipse) // 2]) if len(eclipse) else default_idx
+
+    idx = st.slider(
+        "Time step",
+        min_value=0,
+        max_value=n - 1,
+        value=int(default_idx),
+        step=1,
+        help="Scrub through the simulation. Vectors update live.",
+    )
+    ts = df["timestamp_utc"].iloc[idx]
+    illum = float(df["illumination"].iloc[idx])
+    st.markdown(
+        f"**Time:** {ts}  &middot;  **Step {idx} of {n - 1}**  &middot;  "
+        f"**Illumination:** {illum:.2f}"
+    )
+
+    cols = st.columns(3)
+    show_body = cols[0].checkbox("Body axes (+X red, +Y green, +Z blue)", value=True)
+    show_sun = cols[0].checkbox("Sun direction (gold)", value=True)
+    show_nadir = cols[1].checkbox("Nadir (brown)", value=True)
+    show_velocity = cols[1].checkbox("Velocity (teal)", value=True)
+    show_normal = cols[2].checkbox("Orbit normal (purple)", value=True)
+    show_panels = cols[2].checkbox("Panel normals (orange)", value=True)
+
+    # Gather vectors at the chosen step.
+    r_eci = np.asarray(df.attrs["r_eci_km"][idx])
+    v_eci = np.asarray(df.attrs["v_eci_km_s"][idx])
+    sun_eci = np.asarray(df.attrs["sun_eci_km"][idx])
+    u_sun = sun_eci / np.linalg.norm(sun_eci)
+    nadir = -r_eci / np.linalg.norm(r_eci)
+    v_hat = v_eci / np.linalg.norm(v_eci)
+    h = np.cross(r_eci, v_eci)
+    h_hat = h / np.linalg.norm(h)
+
+    rot = body_to_eci(cfg.attitude, r_eci[None, :], v_eci[None, :], u_sun[None, :])[0]
+    body_x = rot[:, 0]
+    body_y = rot[:, 1]
+    body_z = rot[:, 2]
+
+    traces: list[go.BaseTraceType] = []
+    if show_body:
+        traces += _arrow3d("+X body", body_x, "#d62728")
+        traces += _arrow3d("+Y body", body_y, "#2ca02c")
+        traces += _arrow3d("+Z body", body_z, "#1f77b4")
+    if show_sun:
+        traces += _arrow3d(
+            "Sun", u_sun, "#ffb000", dashed=illum < 0.99
+        )
+    if show_nadir:
+        traces += _arrow3d("Nadir", nadir, "#8c564b")
+    if show_velocity:
+        traces += _arrow3d("Velocity", v_hat, "#17becf")
+    if show_normal:
+        traces += _arrow3d("Orbit normal", h_hat, "#9467bd")
+    if show_panels:
+        for panel in cfg.solar_array.panels:
+            if panel.mounting is PanelMounting.TWO_AXIS:
+                normal_eci = u_sun
+                label = f"{panel.name} (2-axis -> Sun)"
+            else:
+                normal_body = np.asarray(panel.normal_body, dtype=float)
+                normal_body = normal_body / np.linalg.norm(normal_body)
+                normal_eci = rot @ normal_body
+            traces += _arrow3d(label if panel.mounting is PanelMounting.TWO_AXIS else panel.name,
+                               normal_eci, "#ff7f0e", head_size=0.06)
+
+    # Dim origin marker to anchor the eye.
+    traces.append(
+        go.Scatter3d(
+            x=[0.0], y=[0.0], z=[0.0], mode="markers",
+            marker=dict(size=4, color="black"),
+            name="Satellite", hoverinfo="name", showlegend=False,
+        )
+    )
+
+    fig = go.Figure(data=traces)
+    axis_range = [-1.3, 1.3]
+    fig.update_layout(
+        scene=dict(
+            aspectmode="cube",
+            xaxis=dict(range=axis_range, title="ECI X"),
+            yaxis=dict(range=axis_range, title="ECI Y"),
+            zaxis=dict(range=axis_range, title="ECI Z"),
+        ),
+        height=600,
+        margin=dict(l=0, r=0, t=10, b=0),
+        legend=dict(orientation="h"),
+    )
+    st.plotly_chart(fig, width='stretch')
+
+    # Numeric table.
+    rows: list[dict[str, object]] = []
+
+    def _row(label: str, vec: np.ndarray, body_frame: str = "") -> None:
+        rows.append(
+            {
+                "Vector": label,
+                "ECI X": round(float(vec[0]), 4),
+                "ECI Y": round(float(vec[1]), 4),
+                "ECI Z": round(float(vec[2]), 4),
+                "Body-frame expression": body_frame,
+            }
+        )
+
+    _row("+X body", body_x, "+X")
+    _row("+Y body", body_y, "+Y")
+    _row("+Z body", body_z, "+Z")
+    _row("Sun", u_sun, "(depends on attitude)")
+    _row("Nadir", nadir, "(depends on attitude)")
+    _row("Velocity", v_hat, "(depends on attitude)")
+    _row("Orbit normal", h_hat, "")
+    for panel in cfg.solar_array.panels:
+        if panel.mounting is PanelMounting.TWO_AXIS:
+            _row(f"{panel.name} normal", u_sun, "2-axis tracking -> Sun")
+        else:
+            normal_body = np.asarray(panel.normal_body, dtype=float)
+            normal_body = normal_body / np.linalg.norm(normal_body)
+            normal_eci = rot @ normal_body
+            face_label = panel.normal_face if panel.normal_face != "custom" else (
+                f"({normal_body[0]:+.2f}, {normal_body[1]:+.2f}, {normal_body[2]:+.2f})"
+            )
+            _row(f"{panel.name} normal", normal_eci, face_label)
+
+    st.subheader("Numeric values")
+    st.dataframe(pd.DataFrame(rows), width='stretch', hide_index=True)
+
+
+# --------------------------------------------------------------------------------------
 # Main
 # --------------------------------------------------------------------------------------
 
@@ -799,7 +1026,7 @@ def main() -> None:
     # Attach config for metrics (lost through JSON cache attrs).
     df.attrs["config"] = cfg
 
-    tabs = st.tabs(["Summary", "Power", "Battery", "Orbit", "Seasonal"])
+    tabs = st.tabs(["Summary", "Power", "Battery", "Orbit", "Frames", "Seasonal"])
     with tabs[0]:
         _render_summary(df)
     with tabs[1]:
@@ -809,6 +1036,8 @@ def main() -> None:
     with tabs[3]:
         _render_orbit(df)
     with tabs[4]:
+        _render_frames(df)
+    with tabs[5]:
         _render_seasonal(cfg)
 
     st.sidebar.download_button(

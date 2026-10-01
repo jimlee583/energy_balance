@@ -14,7 +14,6 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml.ns import qn
 from docx.shared import Inches, Pt, RGBColor
 
-
 OUT_PATH = Path(__file__).resolve().parent.parent / "docs" / "Satellite_Energy_Balance_App.docx"
 
 

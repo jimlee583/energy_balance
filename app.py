@@ -1094,28 +1094,34 @@ def _render_frames(df: pd.DataFrame) -> None:
         )
 
     fig = go.Figure(data=traces)
-    axis_half = sun_distance * 1.15 if show_sun else orbit_radius * 1.3
-    # Hide the ECI axis frame and its kilometer ticks. The scene is the orbit,
-    # the Sun, and the vectors on the satellite.
+    axis_half = sun_distance * 1.15 if show_sun else orbit_radius * 1.25
+    # Drop the kilometer ticks and axis lines without setting visible=False.
+    # Hiding the axes entirely makes Plotly draw the scene as a small inset.
     blank_axis = dict(
         title="",
         range=[-axis_half, axis_half],
-        visible=False,
         showticklabels=False,
         showgrid=False,
         zeroline=False,
         showbackground=False,
         showspikes=False,
+        showline=False,
+        ticks="",
     )
     fig.update_layout(
         scene=dict(
             aspectmode="cube",
+            bgcolor="rgba(0,0,0,0)",
+            camera=dict(
+                eye=dict(x=1.35, y=1.35, z=0.95),
+                center=dict(x=0, y=0, z=0),
+            ),
             xaxis=blank_axis,
             yaxis=blank_axis,
             zaxis=blank_axis,
         ),
-        height=650,
-        margin=dict(l=0, r=0, t=10, b=0),
+        height=900,
+        margin=dict(l=0, r=0, t=0, b=0),
         legend=dict(orientation="h"),
     )
     st.plotly_chart(fig, width='stretch')

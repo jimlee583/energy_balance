@@ -931,13 +931,10 @@ def _pick_default_time_index(df: pd.DataFrame) -> int:
 def _render_frames(df: pd.DataFrame) -> None:
     cfg: SimulationConfig = df.attrs["config"]
     st.caption(
-        "Earth-centered scene showing the orbit, a notional satellite (box bus plus two wings), "
-        "and the direction to the Sun. Earth stays at the origin but is drawn smaller than true "
-        "scale, so a low orbit and the +X, +Y, and +Z body axes are not buried in the globe. "
-        "The satellite geometry is schematic and not to scale; it rotates with the chosen "
-        "attitude mode. The Sun marker is placed along the true Sun direction but at a "
-        "dramatically reduced distance so everything is visible. Scrub the time slider to watch "
-        "the satellite move along its orbit and see how its body axes line up with Earth and Sun."
+        "Earth-centered scene of the orbit. Earth stays at the origin and is drawn smaller than "
+        "the orbit so the path stays visible. The Sun marker sits along the true Sun direction, "
+        "just outside the orbit. The satellite's +X, +Y, and +Z body axes and its velocity "
+        "vector are drawn on the spacecraft. Scrub the time slider to watch them move."
     )
 
     # Time picker: quick preset + fine slider wired through session state so the
@@ -993,7 +990,7 @@ def _render_frames(df: pd.DataFrame) -> None:
     show_sun = cols[0].checkbox("Sun marker and direction", value=True)
     show_body_axes = cols[1].checkbox("Body axes on satellite", value=True)
     show_nadir = cols[1].checkbox("Nadir arrow", value=False)
-    show_velocity = cols[2].checkbox("Velocity arrow", value=False)
+    show_velocity = cols[2].checkbox("Velocity arrow", value=True)
     show_normal = cols[2].checkbox("Orbit normal arrow", value=False)
 
     # Vectors and attitude at the chosen step.
@@ -1018,8 +1015,11 @@ def _render_frames(df: pd.DataFrame) -> None:
     orbit_radius = float(np.max(r_mag))
     orbit_min = float(np.min(r_mag))
     sat_scale = max(0.04 * orbit_radius, 250.0)
-    arrow_len = 3.0 * sat_scale
-    sun_distance = 2.0 * orbit_radius
+    # Body axes and velocity need to read clearly against the orbit, not the
+    # kilometer grid that used to frame this view.
+    arrow_len = 0.35 * orbit_radius
+    # Keep the Sun in the same view as the orbit instead of far outside it.
+    sun_distance = 1.45 * orbit_radius
     # Draw Earth smaller than true scale and centered at the origin. A real Earth
     # nearly fills a LEO orbit, which hides the trajectory and the body axes.
     # Cap at the true radius so higher orbits are not enlarged.
@@ -1095,12 +1095,24 @@ def _render_frames(df: pd.DataFrame) -> None:
 
     fig = go.Figure(data=traces)
     axis_half = sun_distance * 1.15 if show_sun else orbit_radius * 1.3
+    # Hide the ECI axis frame and its kilometer ticks. The scene is the orbit,
+    # the Sun, and the vectors on the satellite.
+    blank_axis = dict(
+        title="",
+        range=[-axis_half, axis_half],
+        visible=False,
+        showticklabels=False,
+        showgrid=False,
+        zeroline=False,
+        showbackground=False,
+        showspikes=False,
+    )
     fig.update_layout(
         scene=dict(
             aspectmode="cube",
-            xaxis=dict(title="ECI X (km)", range=[-axis_half, axis_half]),
-            yaxis=dict(title="ECI Y (km)", range=[-axis_half, axis_half]),
-            zaxis=dict(title="ECI Z (km)", range=[-axis_half, axis_half]),
+            xaxis=blank_axis,
+            yaxis=blank_axis,
+            zaxis=blank_axis,
         ),
         height=650,
         margin=dict(l=0, r=0, t=10, b=0),

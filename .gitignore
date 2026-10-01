@@ -1,0 +1,11 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.ruff_cache/
+.pytest_cache/
+.DS_Store
+dist/
+build/
+.ipynb_checkpoints/
+.streamlit/secrets.toml

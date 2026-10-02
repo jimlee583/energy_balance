@@ -20,6 +20,7 @@ from .config import (
 )
 from .metrics import SimulationMetrics, compute_metrics, sizing_hints
 from .simulation import run_simulation
+from .solar_array import panel_frames_eci
 
 __all__ = [
     "AttitudeConfig",
@@ -38,6 +39,7 @@ __all__ = [
     "SolarArrayConfig",
     "compute_metrics",
     "load_config",
+    "panel_frames_eci",
     "preset_configs",
     "run_simulation",
     "save_config",

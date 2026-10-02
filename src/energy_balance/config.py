@@ -113,7 +113,12 @@ class PanelConfig(BaseModel):
 
 
 class SolarArrayConfig(BaseModel):
-    panels: list[PanelConfig] = Field(default_factory=lambda: [PanelConfig()])
+    panels: list[PanelConfig] = Field(
+        default_factory=lambda: [
+            PanelConfig(name="Starboard (+Y)", normal_face="+Y"),
+            PanelConfig(name="Port (-Y)", normal_face="-Y"),
+        ]
+    )
     solar_constant_w_m2: float = Field(1361.0, gt=0.0)
 
 
@@ -189,7 +194,6 @@ def _iss_like() -> SimulationConfig:
         ),
         solar_array=SolarArrayConfig(
             panels=[
-                PanelConfig(name="Top (+Z)", normal_face="+Z", area_m2=2.0),
                 PanelConfig(name="Starboard (+Y)", normal_face="+Y", area_m2=2.0),
                 PanelConfig(name="Port (-Y)", normal_face="-Y", area_m2=2.0),
             ]

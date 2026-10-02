@@ -94,8 +94,8 @@ class AttitudeConfig(BaseModel):
 class PanelConfig(BaseModel):
     name: str = "Panel"
     area_m2: float = Field(1.0, gt=0.0)
-    normal_face: Literal["+X", "-X", "+Y", "-Y", "+Z", "-Z", "custom"] = "+Z"
-    normal_body: tuple[float, float, float] = (0.0, 0.0, 1.0)
+    normal_face: Literal["+X", "-X", "+Y", "-Y", "+Z", "-Z", "custom"] = "+Y"
+    normal_body: tuple[float, float, float] = (0.0, 1.0, 0.0)
     mounting: PanelMounting = PanelMounting.FIXED
     rotation_axis_body: tuple[float, float, float] = (0.0, 1.0, 0.0)
     cell_efficiency: float = Field(0.30, gt=0.0, le=1.0)
@@ -113,11 +113,15 @@ class PanelConfig(BaseModel):
 
 
 class SolarArrayConfig(BaseModel):
+    """One or two solar arrays; two is the default, on the +Y and -Y sides."""
+
     panels: list[PanelConfig] = Field(
         default_factory=lambda: [
             PanelConfig(name="Starboard (+Y)", normal_face="+Y"),
             PanelConfig(name="Port (-Y)", normal_face="-Y"),
-        ]
+        ],
+        min_length=1,
+        max_length=2,
     )
     solar_constant_w_m2: float = Field(1361.0, gt=0.0)
 
@@ -220,14 +224,25 @@ def _sso_550() -> SimulationConfig:
         attitude=AttitudeConfig(mode=AttitudeMode.NADIR_POINTING, nadir_yaw_axis="+X"),
         solar_array=SolarArrayConfig(
             panels=[
+                # Both wings share the +Y drive axis, so they are drawn on the
+                # +Y and -Y booms. The rest normal must stay perpendicular to
+                # that axis for the gimbal angle to be meaningful.
                 PanelConfig(
-                    name="Deployed wing",
+                    name="Starboard wing (+Y)",
                     normal_face="custom",
                     normal_body=(0.0, 0.0, 1.0),
                     mounting=PanelMounting.ONE_AXIS,
                     rotation_axis_body=(0.0, 1.0, 0.0),
-                    area_m2=3.0,
-                )
+                    area_m2=1.5,
+                ),
+                PanelConfig(
+                    name="Port wing (-Y)",
+                    normal_face="custom",
+                    normal_body=(0.0, 0.0, 1.0),
+                    mounting=PanelMounting.ONE_AXIS,
+                    rotation_axis_body=(0.0, 1.0, 0.0),
+                    area_m2=1.5,
+                ),
             ]
         ),
         loads=[
@@ -252,11 +267,19 @@ def _geo() -> SimulationConfig:
         solar_array=SolarArrayConfig(
             panels=[
                 PanelConfig(
-                    name="Sun-tracking wing",
+                    name="Starboard wing (+Y)",
                     normal_face="+Z",
                     mounting=PanelMounting.TWO_AXIS,
-                    area_m2=8.0,
-                )
+                    rotation_axis_body=(0.0, 1.0, 0.0),
+                    area_m2=4.0,
+                ),
+                PanelConfig(
+                    name="Port wing (-Y)",
+                    normal_face="+Z",
+                    mounting=PanelMounting.TWO_AXIS,
+                    rotation_axis_body=(0.0, 1.0, 0.0),
+                    area_m2=4.0,
+                ),
             ]
         ),
         loads=[

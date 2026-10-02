@@ -55,11 +55,26 @@ def _init_session() -> None:
         st.session_state.config = next(iter(preset_configs().values())).model_copy(deep=True)
     if "preset_name" not in st.session_state:
         st.session_state.preset_name = next(iter(preset_configs().keys()))
+    if "n_arrays" not in st.session_state:
+        st.session_state.n_arrays = len(st.session_state.config.solar_array.panels)
+
+
+_PANEL_WIDGET_PREFIXES = (
+    "pname", "parea", "pface", "pnx", "pny", "pnz", "pmount",
+    "pax", "pay", "paz", "peff", "ppack", "pinh", "pdeg", "pyear", "ptemp",
+)
 
 
 def _apply_preset(name: str) -> None:
     st.session_state.config = preset_configs()[name].model_copy(deep=True)
     st.session_state.preset_name = name
+    st.session_state.n_arrays = len(st.session_state.config.solar_array.panels)
+    # Keyed widgets own their value once created, so clear the per-panel and
+    # load keys to let the preset repopulate them.
+    stale = [k for k in st.session_state if k.startswith(_PANEL_WIDGET_PREFIXES)]
+    for key in stale:
+        del st.session_state[key]
+    st.session_state.pop("loads_editor", None)
 
 
 # --------------------------------------------------------------------------------------
@@ -212,21 +227,27 @@ def _panels_inputs(cfg: SimulationConfig) -> SolarArrayConfig:
             float(cfg.solar_array.solar_constant_w_m2),
             step=1.0,
         )
-        n_panels = st.number_input(
-            "Number of panels",
-            1,
-            12,
-            len(cfg.solar_array.panels),
+        # Keyed (not `default=`) so the choice survives its own rerun: a
+        # cfg-derived default changes the widget id and drops the new value.
+        n_panels = st.segmented_control(
+            "Number of solar arrays",
+            [1, 2],
+            required=True,
+            format_func=lambda n: "One array" if n == 1 else "Two arrays",
+            key="n_arrays",
         )
+        # Slot 0 is starboard (+Y), slot 1 is port (-Y).
+        sides = [("Starboard (+Y)", "+Y"), ("Port (-Y)", "-Y")]
         panels = []
         for i in range(n_panels):
+            side_name, side_face = sides[i]
             default = (
                 cfg.solar_array.panels[i]
                 if i < len(cfg.solar_array.panels)
-                else PanelConfig(name=f"Panel {i + 1}")
+                else PanelConfig(name=side_name, normal_face=side_face)
             )
             with st.container(border=True):
-                st.markdown(f"**Panel {i + 1}**")
+                st.markdown(f"**Array {i + 1}**")
                 name = st.text_input(f"Name##p{i}", default.name, key=f"pname{i}")
                 area = st.number_input(
                     f"Area m^2##p{i}", 0.01, 100.0, float(default.area_m2), 0.1, key=f"parea{i}"
@@ -447,6 +468,7 @@ def _sidebar() -> SimulationConfig:
             try:
                 data = json.loads(uploaded.read())
                 st.session_state.config = SimulationConfig.model_validate(data)
+                st.session_state.n_arrays = len(st.session_state.config.solar_array.panels)
                 st.success("Config loaded.")
             except Exception as exc:
                 st.error(f"Failed to parse config: {exc}")

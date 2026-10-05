@@ -937,56 +937,6 @@ def _arrow_pair(
     return [line, cone]
 
 
-def _multi_arrow(
-    starts: np.ndarray,
-    tips: np.ndarray,
-    color: str,
-    label: str,
-    scene: str,
-    *,
-    sizeref: float,
-    showlegend: bool = True,
-) -> list[go.BaseTraceType]:
-    """Return [line, cone] for ``N`` arrows combined into two traces."""
-    starts = np.asarray(starts, dtype=float).reshape(-1, 3)
-    tips = np.asarray(tips, dtype=float).reshape(-1, 3)
-    xs: list[float | None] = []
-    ys: list[float | None] = []
-    zs: list[float | None] = []
-    for s, t in zip(starts, tips, strict=True):
-        xs += [s[0], t[0], None]
-        ys += [s[1], t[1], None]
-        zs += [s[2], t[2], None]
-    line = go.Scatter3d(
-        x=xs, y=ys, z=zs, mode="lines",
-        line=dict(color=color, width=5),
-        name=label, hoverinfo="name",
-        showlegend=showlegend, scene=scene,
-    )
-    if len(tips) == 0:
-        # Keep the trace count stable with a hidden placeholder.
-        cone = go.Cone(
-            x=[0.0], y=[0.0], z=[0.0], u=[0.0], v=[0.0], w=[1.0],
-            sizemode="absolute", sizeref=1e-9, anchor="tip",
-            colorscale=[[0, color], [1, color]],
-            showscale=False, showlegend=False, hoverinfo="skip",
-            visible=False, scene=scene,
-        )
-    else:
-        dirs = tips - starts
-        norms = np.linalg.norm(dirs, axis=-1, keepdims=True)
-        norms = np.where(norms < 1e-12, 1.0, norms)
-        u = dirs / norms
-        cone = go.Cone(
-            x=tips[:, 0], y=tips[:, 1], z=tips[:, 2],
-            u=u[:, 0], v=u[:, 1], w=u[:, 2],
-            sizemode="absolute", sizeref=max(sizeref, 1e-6), anchor="tip",
-            colorscale=[[0, color], [1, color]],
-            showscale=False, showlegend=False, hoverinfo="skip", scene=scene,
-        )
-    return [line, cone]
-
-
 def _satellite_frame_traces(
     center: np.ndarray,
     rot_display: np.ndarray,
@@ -1130,24 +1080,22 @@ def _satellite_frame_traces(
                         "#9467bd", "Orbit normal", scene, showlegend=show_legend_here)
         )
 
-    # Panel normal arrows (combined into one Scatter3d + one Cone).
+    # Panel normals, one arrow per array. A single combined cone trace
+    # sizes every head from the gap between arrows, which turns the
+    # kilometer-scale Earth view into one enormous cone.
     if flags.get("panel_normals"):
-        starts = []
-        tips = []
         for i in range(len(cfg.solar_array.panels)):
             normal_b = np.asarray(panel_normal_body[i], dtype=float)
             normal_b = normal_b / max(np.linalg.norm(normal_b), 1e-12)
             normal_d = rot_display @ normal_b
             start = plate_centers_display[i]
-            tips.append(start + normal_d * arrow_len * 0.55)
-            starts.append(start)
-        traces.extend(
-            _multi_arrow(
-                np.asarray(starts), np.asarray(tips),
-                color="#ffb347", label="Panel normals", scene=scene,
-                sizeref=arrow_len * 0.15, showlegend=show_legend_here,
+            traces.extend(
+                _arrow_pair(
+                    start, start + normal_d * arrow_len * 0.55,
+                    "yellow", "Panel normals", scene,
+                    showlegend=show_legend_here and i == 0,
+                )
             )
-        )
 
     # Sun arrow at the satellite.
     if flags.get("sun_arrow"):

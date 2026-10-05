@@ -94,9 +94,10 @@ class AttitudeConfig(BaseModel):
 class PanelConfig(BaseModel):
     name: str = "Panel"
     area_m2: float = Field(1.0, gt=0.0)
-    normal_face: Literal["+X", "-X", "+Y", "-Y", "+Z", "-Z", "custom"] = "+Y"
-    normal_body: tuple[float, float, float] = (0.0, 1.0, 0.0)
-    mounting: PanelMounting = PanelMounting.FIXED
+    # Rest normal is +Z so it stays perpendicular to the default +Y drive axis.
+    normal_face: Literal["+X", "-X", "+Y", "-Y", "+Z", "-Z", "custom"] = "+Z"
+    normal_body: tuple[float, float, float] = (0.0, 0.0, 1.0)
+    mounting: PanelMounting = PanelMounting.ONE_AXIS
     rotation_axis_body: tuple[float, float, float] = (0.0, 1.0, 0.0)
     cell_efficiency: float = Field(0.30, gt=0.0, le=1.0)
     packing_factor: float = Field(0.85, gt=0.0, le=1.0)
@@ -117,8 +118,9 @@ class SolarArrayConfig(BaseModel):
 
     panels: list[PanelConfig] = Field(
         default_factory=lambda: [
-            PanelConfig(name="Starboard (+Y)", normal_face="+Y"),
-            PanelConfig(name="Port (-Y)", normal_face="-Y"),
+            # Wings on the ±Y booms, both driven about +Y, rest face toward +Z.
+            PanelConfig(name="Starboard (+Y)"),
+            PanelConfig(name="Port (-Y)"),
         ],
         min_length=1,
         max_length=2,
@@ -198,8 +200,8 @@ def _iss_like() -> SimulationConfig:
         ),
         solar_array=SolarArrayConfig(
             panels=[
-                PanelConfig(name="Starboard (+Y)", normal_face="+Y", area_m2=2.0),
-                PanelConfig(name="Port (-Y)", normal_face="-Y", area_m2=2.0),
+                PanelConfig(name="Starboard (+Y)", area_m2=2.0),
+                PanelConfig(name="Port (-Y)", area_m2=2.0),
             ]
         ),
         loads=[

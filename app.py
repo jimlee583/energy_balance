@@ -236,15 +236,16 @@ def _panels_inputs(cfg: SimulationConfig) -> SolarArrayConfig:
             format_func=lambda n: "One array" if n == 1 else "Two arrays",
             key="n_arrays",
         )
-        # Slot 0 is starboard (+Y), slot 1 is port (-Y).
-        sides = [("Starboard (+Y)", "+Y"), ("Port (-Y)", "-Y")]
+        # Slot 0 is starboard (+Y), slot 1 is port (-Y). A new array uses the
+        # PanelConfig default: 1-axis about +Y with a +Z rest normal.
+        sides = ["Starboard (+Y)", "Port (-Y)"]
         panels = []
         for i in range(n_panels):
-            side_name, side_face = sides[i]
+            side_name = sides[i]
             default = (
                 cfg.solar_array.panels[i]
                 if i < len(cfg.solar_array.panels)
-                else PanelConfig(name=side_name, normal_face=side_face)
+                else PanelConfig(name=side_name)
             )
             with st.container(border=True):
                 st.markdown(f"**Array {i + 1}**")
@@ -904,6 +905,38 @@ def _plate_color(brightness: float) -> str:
     return f"rgb({r},{g},{bb})"
 
 
+def _rectangle_grid(
+    center: np.ndarray,
+    edge: np.ndarray,
+    width: np.ndarray,
+    half_edge: float,
+    half_width: float,
+    *,
+    n_edge: int = 4,
+    n_width: int = 2,
+) -> tuple[list[float | None], list[float | None], list[float | None]]:
+    """Line segments for a rectangular outline plus a solar-cell grid in that plane."""
+    c = np.asarray(center, dtype=float)
+    e = np.asarray(edge, dtype=float)
+    w = np.asarray(width, dtype=float)
+    xs: list[float | None] = []
+    ys: list[float | None] = []
+    zs: list[float | None] = []
+
+    def _seg(a: np.ndarray, b: np.ndarray) -> None:
+        xs.extend((float(a[0]), float(b[0]), None))
+        ys.extend((float(a[1]), float(b[1]), None))
+        zs.extend((float(a[2]), float(b[2]), None))
+
+    for i in range(n_edge + 1):
+        t = -1.0 + 2.0 * i / n_edge
+        _seg(c + e * (half_edge * t) + w * half_width, c + e * (half_edge * t) - w * half_width)
+    for j in range(n_width + 1):
+        t = -1.0 + 2.0 * j / n_width
+        _seg(c + w * (half_width * t) + e * half_edge, c + w * (half_width * t) - e * half_edge)
+    return xs, ys, zs
+
+
 def _arrow_pair(
     start: np.ndarray,
     tip: np.ndarray,
@@ -957,6 +990,7 @@ def _satellite_frame_traces(
     panel_plate_scale: float,
     boom_width: float,
     trail_display: np.ndarray | None = None,
+    draw_solar_rays: bool = False,
 ) -> list[go.BaseTraceType]:
     """Build the full satellite + arrows + optional trail for one animation frame.
 
@@ -964,11 +998,17 @@ def _satellite_frame_traces(
     body-coords to the display frame (identity for a body-fixed close-up, the
     satellite's body-to-ECI matrix otherwise). The resulting trace list has a
     deterministic order and length so each frame produces matching data.
+
+    When ``draw_solar_rays`` is set, each panel also gets a rectangular solar-ray
+    graphic in its plane and a yellow arrow along the sun-facing normal.
     """
     show_legend_here = scene == "scene"
     traces: list[go.BaseTraceType] = []
     s = float(sat_scale)
     center = np.asarray(center, dtype=float)
+    sun_d = rot_display @ np.asarray(sun_body, dtype=float)
+    sun_norm = float(np.linalg.norm(sun_d))
+    sun_d = np.array([1.0, 0.0, 0.0]) if sun_norm < 1e-12 else sun_d / sun_norm
 
     # Bus (cube of side 2*s).
     traces.append(
@@ -1036,9 +1076,64 @@ def _satellite_frame_traces(
                 edge=edge_d, width=width_d, normal=normal_d,
                 size_edge=l_edge, size_width=l_width, thickness=thickness,
                 color=color, name=panel.name, scene=scene,
-                opacity=0.95, showlegend=show_legend_here,
+                opacity=0.35 if draw_solar_rays else 0.95,
+                showlegend=show_legend_here,
             )
         )
+
+        # Rectangular solar ray coming out this panel's plus or minus side.
+        # The rectangle is perpendicular to the Sun, so its arrow is the
+        # normal and points straight at the Sun.
+        if draw_solar_rays:
+            outward = plate_center_display - center
+            outward_norm = float(np.linalg.norm(outward))
+            if outward_norm < 1e-9:
+                outward = normal_d if float(np.dot(normal_d, sun_d)) >= 0.0 else -normal_d
+            else:
+                outward = outward / outward_norm
+            face = sun_d
+            edge = outward - np.dot(outward, face) * face
+            edge_norm = float(np.linalg.norm(edge))
+            if edge_norm < 0.2:
+                fallback = edge_d if abs(float(np.dot(edge_d, face))) < 0.9 else width_d
+                edge = fallback - np.dot(fallback, face) * face
+                edge_norm = float(np.linalg.norm(edge))
+            edge = edge / max(edge_norm, 1e-12)
+            width = np.cross(face, edge)
+            ray_edge = max(l_edge * 1.15, s * 2.6)
+            ray_width = max(l_width, s * 1.5)
+            ray_center = plate_center_display + outward * max(0.55 * s, 0.18 * ray_edge)
+            ray_center = ray_center + face * (thickness * 0.5)
+            lit = illum >= 0.5
+            grid_x, grid_y, grid_z = _rectangle_grid(
+                ray_center, edge, width, 0.5 * ray_edge, 0.5 * ray_width,
+            )
+            traces.append(
+                _plate_mesh(
+                    center=ray_center,
+                    edge=edge, width=width, normal=face,
+                    size_edge=ray_edge, size_width=ray_width, thickness=thickness * 0.35,
+                    color="#f6d56a" if lit else "#8a7d58",
+                    name="Solar rays", scene=scene,
+                    opacity=0.55 if lit else 0.28,
+                    showlegend=(i == 0),
+                )
+            )
+            traces.append(
+                go.Scatter3d(
+                    x=grid_x, y=grid_y, z=grid_z, mode="lines",
+                    line=dict(color="#ffe38a" if lit else "#b3a57a", width=3),
+                    name="Solar rays", hoverinfo="skip",
+                    showlegend=False, scene=scene,
+                )
+            )
+            traces.extend(
+                _arrow_pair(
+                    ray_center, ray_center + face * sun_arrow_len * 0.72,
+                    "yellow", "Sun normal", scene,
+                    dashed=not lit, showlegend=(i == 0),
+                )
+            )
 
     # Booms (single combined line trace, always present).
     traces.append(
@@ -1083,7 +1178,7 @@ def _satellite_frame_traces(
     # Panel normals, one arrow per array. A single combined cone trace
     # sizes every head from the gap between arrows, which turns the
     # kilometer-scale Earth view into one enormous cone.
-    if flags.get("panel_normals"):
+    if flags.get("panel_normals") and not draw_solar_rays:
         for i in range(len(cfg.solar_array.panels)):
             normal_b = np.asarray(panel_normal_body[i], dtype=float)
             normal_b = normal_b / max(np.linalg.norm(normal_b), 1e-12)
@@ -1167,8 +1262,11 @@ def _render_frames(df: pd.DataFrame) -> None:
         "incidence, and 2-axis arrays always face the Sun. Plates brighten as they face the Sun "
         "and darken in eclipse. In body-fixed close-up mode the Sun arrow sweeps around the "
         "satellite over the orbit; in inertial mode the satellite tumbles while the arrays stay "
-        "pointed at the Sun. 1-axis arrays continue to track the geometric Sun direction while "
-        "in eclipse (no rest-mode command is modeled)."
+        "pointed at the Sun. The inertial close-up draws a rectangular solar ray out the plus "
+        "and minus side of each array, with a yellow arrow normal to that rectangle and pointed "
+        "at the Sun. 1-axis "
+        "arrays continue to track the geometric Sun direction while in eclipse (no rest-mode "
+        "command is modeled)."
     )
 
     # ------------------------------------------------------------------
@@ -1371,6 +1469,7 @@ def _render_frames(df: pd.DataFrame) -> None:
             panel_plate_scale=1.0,
             boom_width=4,
             trail_display=None,
+            draw_solar_rays=(close_up_mode == "Inertial"),
         )
         return s1, s2
 

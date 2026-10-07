@@ -67,11 +67,11 @@ class OrbitConfig(BaseModel):
     """Keplerian orbit, plus flags for sun-synchronous setup."""
 
     spec: OrbitSpec = OrbitSpec.ALTITUDES
-    perigee_altitude_km: float = Field(500.0, ge=120.0, le=100_000.0)
-    apogee_altitude_km: float = Field(500.0, ge=120.0, le=400_000.0)
-    semi_major_axis_km: float = Field(6878.137, ge=6500.0, le=500_000.0)
+    perigee_altitude_km: float = Field(1000.0, ge=120.0, le=100_000.0)
+    apogee_altitude_km: float = Field(1000.0, ge=120.0, le=400_000.0)
+    semi_major_axis_km: float = Field(7378.137, ge=6500.0, le=500_000.0)
     eccentricity: float = Field(0.0, ge=0.0, lt=1.0)
-    inclination_deg: float = Field(51.6, ge=0.0, le=180.0)
+    inclination_deg: float = Field(80.0, ge=0.0, le=180.0)
     raan_deg: float = Field(0.0, ge=0.0, le=360.0)
     arg_perigee_deg: float = Field(0.0, ge=0.0, le=360.0)
     true_anomaly_deg: float = Field(0.0, ge=0.0, le=360.0)
@@ -129,14 +129,14 @@ class SolarArrayConfig(BaseModel):
 
 
 class LoadConfig(BaseModel):
-    name: str = "Bus"
-    power_w: float = Field(20.0, ge=0.0)
+    name: str = "Payload"
+    power_w: float = Field(300.0, ge=0.0)
     mode: LoadMode = LoadMode.ALWAYS
     duty_percent: float = Field(100.0, ge=0.0, le=100.0)
 
 
 class BatteryConfig(BaseModel):
-    capacity_wh: float = Field(100.0, gt=0.0)
+    capacity_wh: float = Field(400.0, gt=0.0)
     initial_soc_percent: float = Field(100.0, ge=0.0, le=100.0)
     max_dod_percent: float = Field(30.0, ge=0.0, le=100.0, description="Allowed depth of discharge")
     charge_efficiency: float = Field(0.95, gt=0.0, le=1.0)
@@ -188,6 +188,11 @@ def load_config(path: str | Path) -> SimulationConfig:
 
 
 # --- Presets ---------------------------------------------------------------------------
+
+
+def _leo_1000() -> SimulationConfig:
+    """Opening configuration: 1000 km circular orbit at 80 deg inclination."""
+    return SimulationConfig(name="LEO 1000 km, 80 deg")
 
 
 def _iss_like() -> SimulationConfig:
@@ -294,5 +299,5 @@ def _geo() -> SimulationConfig:
 
 def preset_configs() -> dict[str, SimulationConfig]:
     """Return built-in example configurations keyed by name."""
-    presets = [_iss_like(), _sso_550(), _geo()]
+    presets = [_leo_1000(), _iss_like(), _sso_550(), _geo()]
     return {p.name: p for p in presets}

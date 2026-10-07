@@ -153,8 +153,9 @@ def build_document() -> Document:
     _add_heading(doc, "3. What the user enters", 1)
     _add_para(
         doc,
-        "All inputs are collected in the Streamlit sidebar. There are three built-in presets "
-        "(an ISS-like LEO orbit, a 550 km sun-synchronous orbit at 10:30 LTAN, and a GEO orbit); "
+        "All inputs are collected in the Streamlit sidebar. There are four built-in presets "
+        "(a 1000 km LEO at 80 deg inclination, an ISS-like LEO orbit, a 550 km sun-synchronous "
+        "orbit at 10:30 LTAN, and a GEO orbit); "
         "the user can start from any of them, tweak values, and save or load the whole config as "
         "a JSON file.",
     )
@@ -404,7 +405,7 @@ def build_document() -> Document:
             ["Battery state of charge", "Always in [0, 100] %"],
             ["Energy conservation in a closed loop", "Delta SOC = net energy in"],
             ["Config save/load round trip", "Byte-for-byte identical"],
-            ["All three presets", "Run end-to-end without error"],
+            ["All four presets", "Run end-to-end without error"],
         ],
     )
 

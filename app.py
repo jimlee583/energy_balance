@@ -1482,8 +1482,21 @@ def _render_frames(df: pd.DataFrame) -> None:
         ts = pd.Timestamp(timestamp_k[k])
         minutes = (float(time_k[k]) - float(time_k[0])) / 60.0
         return (
-            f"Orbit {orbit_sel} &middot; {ts}  (t+{minutes:5.1f} min) &middot; "
+            f"Orbit {orbit_sel} · {ts}  (t+{minutes:5.1f} min) · "
             f"illumination {float(illum_k[k]):.2f}"
+        )
+
+    def _figure_title(k: int) -> dict:
+        # Sit at the top of the paper, above the Play/Pause row.
+        return dict(
+            text=_title_for(k),
+            x=0.5,
+            xanchor="center",
+            xref="paper",
+            y=1.0,
+            yanchor="top",
+            yref="paper",
+            automargin=False,
         )
 
     frames: list[go.Frame] = []
@@ -1494,7 +1507,7 @@ def _render_frames(df: pd.DataFrame) -> None:
                 name=str(k),
                 data=s1 + s2,
                 traces=animated_indices,
-                layout=go.Layout(title=dict(text=_title_for(k))),
+                layout=go.Layout(title=_figure_title(k)),
             )
         )
 
@@ -1513,6 +1526,12 @@ def _render_frames(df: pd.DataFrame) -> None:
     for tr in initial_data:
         fig.add_trace(tr)
     fig.frames = tuple(frames)
+
+    # Reserve a header inside the figure: title, then Play/Pause, then the
+    # subplot labels. The buttons used to share the title line and covered it.
+    scene_top = 0.82
+    for ann in fig.layout.annotations:
+        ann.update(y=scene_top, yanchor="bottom")
 
     axis_half_s1 = sun_distance_s1 * 1.15
     blank_axis_s1 = dict(
@@ -1537,22 +1556,31 @@ def _render_frames(df: pd.DataFrame) -> None:
     )]
 
     fig.update_layout(
-        title=dict(text=_title_for(0)),
+        title=_figure_title(0),
         height=720,
-        margin=dict(l=0, r=0, t=70, b=10),
+        margin=dict(l=0, r=0, t=28, b=10),
         legend=dict(orientation="h", y=-0.04),
         scene=dict(
             aspectmode="cube", bgcolor="rgba(0,0,0,0)",
+            domain=dict(y=[0.0, scene_top]),
             camera=dict(eye=dict(x=1.35, y=1.35, z=0.95), center=dict(x=0, y=0, z=0)),
             xaxis=blank_axis_s1, yaxis=blank_axis_s1, zaxis=blank_axis_s1,
         ),
         scene2=dict(
             aspectmode="cube", bgcolor="rgba(0,0,0,0)",
+            domain=dict(y=[0.0, scene_top]),
             camera=dict(eye=dict(x=2.0, y=2.0, z=1.5), center=dict(x=0, y=0, z=0)),
             xaxis=blank_axis_s2, yaxis=blank_axis_s2, zaxis=blank_axis_s2,
         ),
         updatemenus=[dict(
-            type="buttons", showactive=False, x=0.02, y=1.14, xanchor="left", yanchor="top",
+            type="buttons",
+            direction="right",
+            showactive=False,
+            x=0.0,
+            y=0.948,
+            xanchor="left",
+            yanchor="top",
+            pad=dict(t=0, b=0, l=0, r=8),
             buttons=[
                 dict(label="Play", method="animate", args=play_args),
                 dict(label="Pause", method="animate", args=pause_args),

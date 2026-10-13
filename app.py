@@ -62,6 +62,7 @@ def _init_session() -> None:
 _PANEL_WIDGET_PREFIXES = (
     "pname", "parea", "pface", "pnx", "pny", "pnz", "pmount",
     "pax", "pay", "paz", "peff", "ppack", "pinh", "pdeg", "pyear", "ptemp",
+    "p_pair_axis",
 )
 
 
@@ -218,6 +219,32 @@ def _attitude_inputs(cfg: SimulationConfig) -> AttitudeConfig:
     return AttitudeConfig(mode=mode, nadir_yaw_axis=nadir_yaw, sun_pointing_axis=sun_axis)
 
 
+_WING_SIDE_AXES = {
+    "±Y": (0.0, 1.0, 0.0),
+    "±X": (1.0, 0.0, 0.0),
+}
+
+
+def _default_wing_side_axis(panel: PanelConfig) -> str:
+    """Choose the supported wing-pair axis closest to a panel's stored axis."""
+    axis = np.abs(np.asarray(panel.rotation_axis_body, dtype=float))
+    return "±X" if axis[0] > axis[1] else "±Y"
+
+
+def _symmetric_wing_panels(shared: PanelConfig, side_axis: str) -> list[PanelConfig]:
+    """Create equal-area wings on opposite sides of the selected body axis."""
+    axis = _WING_SIDE_AXES[side_axis]
+    axis_name = side_axis[-1]
+    return [
+        shared.model_copy(
+            update={"name": f"Wing (+{axis_name})", "rotation_axis_body": axis}
+        ),
+        shared.model_copy(
+            update={"name": f"Wing (-{axis_name})", "rotation_axis_body": axis}
+        ),
+    ]
+
+
 def _panels_inputs(cfg: SimulationConfig) -> SolarArrayConfig:
     with st.sidebar.expander("Solar arrays", expanded=False):
         solar_const = st.number_input(
@@ -236,119 +263,136 @@ def _panels_inputs(cfg: SimulationConfig) -> SolarArrayConfig:
             format_func=lambda n: "One array" if n == 1 else "Two arrays",
             key="n_arrays",
         )
-        # Slot 0 is starboard (+Y), slot 1 is port (-Y). A new array uses the
-        # PanelConfig default: 4 m^2, 1-axis about +Y, +Z rest normal.
-        sides = ["Starboard (+Y)", "Port (-Y)"]
-        panels = []
-        for i in range(n_panels):
-            side_name = sides[i]
-            default = (
-                cfg.solar_array.panels[i]
-                if i < len(cfg.solar_array.panels)
-                else PanelConfig(name=side_name)
+        # In two-array mode, the first stored panel supplies the shared
+        # defaults. Both generated wings receive the entered per-wing area.
+        default = (
+            cfg.solar_array.panels[0]
+            if cfg.solar_array.panels
+            else PanelConfig()
+        )
+        with st.container(border=True):
+            st.markdown("**Array parameters**" if n_panels == 1 else "**Shared wing parameters**")
+            if n_panels == 1:
+                name = st.text_input("Name##p0", default.name, key="pname0")
+                side_axis = None
+            else:
+                side_axis = st.selectbox(
+                    "Wing mounting sides",
+                    list(_WING_SIDE_AXES),
+                    index=list(_WING_SIDE_AXES).index(_default_wing_side_axis(default)),
+                    key="p_pair_axis",
+                    help="Creates one identical wing on each side of the spacecraft.",
+                )
+                name = "Wing"
+            area = st.number_input(
+                "Area per wing (m²)" if n_panels == 2 else "Area (m²)",
+                0.01,
+                100.0,
+                float(default.area_m2),
+                0.1,
+                key="parea0",
             )
-            with st.container(border=True):
-                st.markdown(f"**Array {i + 1}**")
-                name = st.text_input(f"Name##p{i}", default.name, key=f"pname{i}")
-                area = st.number_input(
-                    f"Area m^2##p{i}", 0.01, 100.0, float(default.area_m2), 0.1, key=f"parea{i}"
-                )
-                face = st.selectbox(
-                    f"Body-frame normal##p{i}",
-                    list(BODY_FACES.keys()) + ["custom"],
-                    index=(list(BODY_FACES.keys()) + ["custom"]).index(default.normal_face),
-                    key=f"pface{i}",
-                )
-                normal_body = default.normal_body
-                if face == "custom":
-                    cols = st.columns(3)
-                    nx = cols[0].number_input(f"nx##p{i}", -1.0, 1.0, float(default.normal_body[0]), 0.05, key=f"pnx{i}")
-                    ny = cols[1].number_input(f"ny##p{i}", -1.0, 1.0, float(default.normal_body[1]), 0.05, key=f"pny{i}")
-                    nz = cols[2].number_input(f"nz##p{i}", -1.0, 1.0, float(default.normal_body[2]), 0.05, key=f"pnz{i}")
-                    normal_body = (nx, ny, nz)
-                mounting = st.selectbox(
-                    f"Mounting##p{i}",
-                    list(PanelMounting),
-                    format_func=lambda m: {
-                        PanelMounting.FIXED: "Fixed",
-                        PanelMounting.ONE_AXIS: "1-axis tracking",
-                        PanelMounting.TWO_AXIS: "2-axis tracking",
-                    }[m],
-                    index=list(PanelMounting).index(default.mounting),
-                    key=f"pmount{i}",
-                )
-                if mounting is PanelMounting.ONE_AXIS:
-                    cols = st.columns(3)
-                    ax = cols[0].number_input(f"ax##p{i}", -1.0, 1.0, float(default.rotation_axis_body[0]), 0.05, key=f"pax{i}")
-                    ay = cols[1].number_input(f"ay##p{i}", -1.0, 1.0, float(default.rotation_axis_body[1]), 0.05, key=f"pay{i}")
-                    az = cols[2].number_input(f"az##p{i}", -1.0, 1.0, float(default.rotation_axis_body[2]), 0.05, key=f"paz{i}")
-                    rotation_axis = (ax, ay, az)
-                else:
-                    rotation_axis = default.rotation_axis_body
-                eff = st.number_input(
-                    f"Cell efficiency##p{i}",
-                    0.05,
-                    0.5,
-                    float(default.cell_efficiency),
-                    0.01,
-                    key=f"peff{i}",
-                )
-                pack = st.number_input(
-                    f"Packing factor##p{i}",
-                    0.1,
-                    1.0,
-                    float(default.packing_factor),
-                    0.05,
-                    key=f"ppack{i}",
-                )
-                inherent = st.number_input(
-                    f"Inherent degradation (I_d)##p{i}",
-                    0.3,
-                    1.0,
-                    float(default.inherent_degradation),
-                    0.01,
-                    key=f"pinh{i}",
-                )
-                deg_year = st.number_input(
-                    f"Degradation per year##p{i}",
-                    0.0,
-                    0.2,
-                    float(default.degradation_per_year),
-                    0.005,
-                    key=f"pdeg{i}",
-                )
-                mission_year = st.number_input(
-                    f"Mission year##p{i}",
-                    0.0,
-                    20.0,
-                    float(default.mission_year),
-                    0.5,
-                    key=f"pyear{i}",
-                )
-                temp_loss = st.number_input(
-                    f"Temperature loss (fraction)##p{i}",
-                    0.0,
-                    0.5,
-                    float(default.temperature_loss),
-                    0.01,
-                    key=f"ptemp{i}",
-                )
-                panels.append(
-                    PanelConfig(
-                        name=name,
-                        area_m2=area,
-                        normal_face=face,
-                        normal_body=normal_body,
-                        mounting=mounting,
-                        rotation_axis_body=rotation_axis,
-                        cell_efficiency=eff,
-                        packing_factor=pack,
-                        inherent_degradation=inherent,
-                        degradation_per_year=deg_year,
-                        mission_year=mission_year,
-                        temperature_loss=temp_loss,
-                    )
-                )
+            face = st.selectbox(
+                "Body-frame normal##p0",
+                list(BODY_FACES.keys()) + ["custom"],
+                index=(list(BODY_FACES.keys()) + ["custom"]).index(default.normal_face),
+                key="pface0",
+            )
+            normal_body = default.normal_body
+            if face == "custom":
+                cols = st.columns(3)
+                nx = cols[0].number_input("nx##p0", -1.0, 1.0, float(default.normal_body[0]), 0.05, key="pnx0")
+                ny = cols[1].number_input("ny##p0", -1.0, 1.0, float(default.normal_body[1]), 0.05, key="pny0")
+                nz = cols[2].number_input("nz##p0", -1.0, 1.0, float(default.normal_body[2]), 0.05, key="pnz0")
+                normal_body = (nx, ny, nz)
+            mounting = st.selectbox(
+                "Mounting##p0",
+                list(PanelMounting),
+                format_func=lambda m: {
+                    PanelMounting.FIXED: "Fixed",
+                    PanelMounting.ONE_AXIS: "1-axis tracking",
+                    PanelMounting.TWO_AXIS: "2-axis tracking",
+                }[m],
+                index=list(PanelMounting).index(default.mounting),
+                key="pmount0",
+            )
+            if n_panels == 2:
+                rotation_axis = _WING_SIDE_AXES[side_axis]
+            elif mounting is PanelMounting.ONE_AXIS:
+                cols = st.columns(3)
+                ax = cols[0].number_input("ax##p0", -1.0, 1.0, float(default.rotation_axis_body[0]), 0.05, key="pax0")
+                ay = cols[1].number_input("ay##p0", -1.0, 1.0, float(default.rotation_axis_body[1]), 0.05, key="pay0")
+                az = cols[2].number_input("az##p0", -1.0, 1.0, float(default.rotation_axis_body[2]), 0.05, key="paz0")
+                rotation_axis = (ax, ay, az)
+            else:
+                rotation_axis = default.rotation_axis_body
+            eff = st.number_input(
+                "Cell efficiency##p0",
+                0.05,
+                0.5,
+                float(default.cell_efficiency),
+                0.01,
+                key="peff0",
+            )
+            pack = st.number_input(
+                "Packing factor##p0",
+                0.1,
+                1.0,
+                float(default.packing_factor),
+                0.05,
+                key="ppack0",
+            )
+            inherent = st.number_input(
+                "Inherent degradation (I_d)##p0",
+                0.3,
+                1.0,
+                float(default.inherent_degradation),
+                0.01,
+                key="pinh0",
+            )
+            deg_year = st.number_input(
+                "Degradation per year##p0",
+                0.0,
+                0.2,
+                float(default.degradation_per_year),
+                0.005,
+                key="pdeg0",
+            )
+            mission_year = st.number_input(
+                "Mission year##p0",
+                0.0,
+                20.0,
+                float(default.mission_year),
+                0.5,
+                key="pyear0",
+            )
+            temp_loss = st.number_input(
+                "Temperature loss (fraction)##p0",
+                0.0,
+                0.5,
+                float(default.temperature_loss),
+                0.01,
+                key="ptemp0",
+            )
+            shared = PanelConfig(
+                name=name,
+                area_m2=area,
+                normal_face=face,
+                normal_body=normal_body,
+                mounting=mounting,
+                rotation_axis_body=rotation_axis,
+                cell_efficiency=eff,
+                packing_factor=pack,
+                inherent_degradation=inherent,
+                degradation_per_year=deg_year,
+                mission_year=mission_year,
+                temperature_loss=temp_loss,
+            )
+            panels = (
+                [shared]
+                if n_panels == 1
+                else _symmetric_wing_panels(shared, side_axis)
+            )
     return SolarArrayConfig(panels=panels, solar_constant_w_m2=solar_const)
 
 
@@ -1025,6 +1069,7 @@ def _satellite_frame_traces(
     boom_zs: list[float | None] = []
     plate_centers_display: list[np.ndarray] = []
     axis_side: dict[tuple[float, float, float], int] = {}
+    paired_wings = len(cfg.solar_array.panels) == 2
 
     for i, panel in enumerate(cfg.solar_array.panels):
         area = max(float(panel.area_m2), 0.01)
@@ -1049,16 +1094,20 @@ def _satellite_frame_traces(
         edge_d = rot_display @ edge_b
         width_d = rot_display @ width_b
 
-        if panel.mounting is PanelMounting.FIXED:
+        if panel.mounting is PanelMounting.FIXED and not paired_wings:
             plate_center_body = normal_b * (s + thickness * 0.5)
         else:
-            axis_body = np.array(panel.rotation_axis_body, dtype=float)
+            axis_panel = cfg.solar_array.panels[0] if paired_wings else panel
+            axis_body = np.array(axis_panel.rotation_axis_body, dtype=float)
             if np.linalg.norm(axis_body) < 1e-9:
                 axis_body = np.array([0.0, 1.0, 0.0])
             axis_body = axis_body / np.linalg.norm(axis_body)
-            key = tuple(np.round(axis_body, 6))
-            sign = axis_side.get(key, +1)
-            axis_side[key] = -sign
+            if paired_wings:
+                sign = +1 if i == 0 else -1
+            else:
+                key = tuple(np.round(axis_body, 6))
+                sign = axis_side.get(key, +1)
+                axis_side[key] = -sign
             boom_len = s + l_edge * 0.5
             plate_center_body = sign * axis_body * boom_len
             bs_d = rot_display @ (sign * axis_body * s) + center

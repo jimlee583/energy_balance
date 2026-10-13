@@ -60,6 +60,7 @@ def run_simulation(config: SimulationConfig) -> pd.DataFrame:
         sun["u_sun_eci"],
         sun["distance_au"],
         illum,
+        times_s,
     )
     loads = total_load_watts(config.loads, illum)
 
@@ -101,6 +102,12 @@ def run_simulation(config: SimulationConfig) -> pd.DataFrame:
     # Attach panel-wise power and orbit-plane ECI components as attributes.
     df.attrs["panel_names"] = array["panel_names"]
     df.attrs["panel_power_w"] = array["per_panel"]
+    df.attrs["panel_normal_eci"] = array["normal_eci"]
+    df.attrs["panel_edge_eci"] = array["edge_eci"]
+    df.attrs["panel_cos_incidence"] = array["cos_incidence"]
+    df.attrs["panel_angle_deg"] = array["angle_deg"]
+    df.attrs["panel_target_angle_deg"] = array["target_angle_deg"]
+    df.attrs["panel_rewinding"] = array["rewinding"]
     df.attrs["load_names"] = loads["load_names"]
     df.attrs["load_power_w"] = loads["per_load"]
     df.attrs["r_eci_km"] = orbit["r_eci_km"]

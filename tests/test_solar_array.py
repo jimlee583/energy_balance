@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import numpy as np
+import pytest
+from pydantic import ValidationError
 
 from energy_balance import PanelConfig, PanelMounting, panel_frames_eci
 
@@ -128,3 +130,56 @@ def test_rotation_matrix_applies_correctly():
     out = panel_frames_eci(panel, rot, sun)
     assert np.allclose(out["normal_eci"][0], [0.0, -1.0, 0.0], atol=1e-9)
     assert np.allclose(out["cos_incidence"][0], 1.0)
+
+
+def test_twist_limited_panel_rewinds_at_rate_and_loses_incidence():
+    panel = PanelConfig(
+        name="capped",
+        area_m2=1.0,
+        normal_face="+Z",
+        mounting=PanelMounting.ONE_AXIS,
+        rotation_axis_body=(0.0, 1.0, 0.0),
+        gimbal_min_deg=-180.0,
+        gimbal_max_deg=180.0,
+        max_slew_rate_deg_s=60.0,
+    )
+    ideal_deg = np.array([0.0, 170.0, 190.0])
+    sun = np.stack(
+        [
+            np.sin(np.deg2rad(ideal_deg)),
+            np.zeros_like(ideal_deg),
+            np.cos(np.deg2rad(ideal_deg)),
+        ],
+        axis=-1,
+    )
+
+    out = panel_frames_eci(panel, _identity_rotations(3), sun, np.array([0.0, 1.0, 2.0]))
+
+    np.testing.assert_allclose(out["target_angle_deg"], [0.0, 170.0, -170.0])
+    np.testing.assert_allclose(out["angle_deg"], [0.0, 60.0, 0.0])
+    assert out["rewinding"].tolist() == [False, False, True]
+    assert np.all(out["angle_deg"] >= -180.0)
+    assert np.all(out["angle_deg"] <= 180.0)
+    assert out["cos_incidence"][-1] == pytest.approx(0.0)
+
+
+@pytest.mark.parametrize(
+    ("minimum", "maximum"),
+    [
+        (-180.0, None),
+        (None, 180.0),
+        (10.0, 370.0),
+        (-370.0, -10.0),
+        (-90.0, 90.0),
+    ],
+)
+def test_invalid_twist_limits_are_rejected(minimum, maximum):
+    with pytest.raises(ValidationError):
+        PanelConfig(gimbal_min_deg=minimum, gimbal_max_deg=maximum)
+
+
+def test_twist_limited_panel_requires_sample_times():
+    panel = PanelConfig(gimbal_min_deg=-180.0, gimbal_max_deg=180.0)
+
+    with pytest.raises(ValueError, match="times_s is required"):
+        panel_frames_eci(panel, _identity_rotations(1), np.array([[0.0, 0.0, 1.0]]))

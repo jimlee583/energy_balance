@@ -92,3 +92,29 @@ def test_mission_epoch_is_tz_aware():
     reloaded = SimulationConfig.model_validate(data)
     assert reloaded.mission.epoch.tzinfo is not None
     assert reloaded.mission.epoch.tzinfo.utcoffset(reloaded.mission.epoch) == UTC.utcoffset(reloaded.mission.epoch)
+
+
+def test_simulation_exposes_twist_cap_trajectory_diagnostics():
+    cfg = SimulationConfig(
+        mission=MissionConfig(duration_days=0.05, time_step_s=60.0),
+        solar_array=SolarArrayConfig(
+            panels=[
+                PanelConfig(
+                    name="capped",
+                    gimbal_min_deg=-180.0,
+                    gimbal_max_deg=180.0,
+                    max_slew_rate_deg_s=0.5,
+                )
+            ]
+        ),
+    )
+
+    df = run_simulation(cfg)
+
+    n_samples = len(df)
+    assert df.attrs["panel_angle_deg"].shape == (1, n_samples)
+    assert df.attrs["panel_target_angle_deg"].shape == (1, n_samples)
+    assert df.attrs["panel_rewinding"].shape == (1, n_samples)
+    assert df.attrs["panel_normal_eci"].shape == (1, n_samples, 3)
+    assert np.all(df.attrs["panel_angle_deg"] >= -180.0)
+    assert np.all(df.attrs["panel_angle_deg"] <= 180.0)

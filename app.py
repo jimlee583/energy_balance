@@ -32,7 +32,6 @@ from energy_balance import (
     SimulationConfig,
     SolarArrayConfig,
     compute_metrics,
-    panel_frames_eci,
     preset_configs,
     run_simulation,
 )
@@ -62,7 +61,7 @@ def _init_session() -> None:
 _PANEL_WIDGET_PREFIXES = (
     "pname", "parea", "pface", "pnx", "pny", "pnz", "pmount",
     "pax", "pay", "paz", "peff", "ppack", "pinh", "pdeg", "pyear", "ptemp",
-    "p_pair_axis",
+    "ptwist", "pgmin", "pgmax", "pslew", "p_pair_axis",
 )
 
 
@@ -241,7 +240,9 @@ def _solar_array_summary(array: SolarArrayConfig) -> str:
         else ""
     )
     total_area_m2 = sum(panel.area_m2 for panel in array.panels)
-    return f"{panel_count} {panel_label}{side_axis}, {total_area_m2:,.1f} m²"
+    limited = any(panel.gimbal_min_deg is not None for panel in array.panels)
+    twist_label = ", twist-capped" if limited else ""
+    return f"{panel_count} {panel_label}{side_axis}, {total_area_m2:,.1f} m²{twist_label}"
 
 
 def _symmetric_wing_panels(shared: PanelConfig, side_axis: str) -> list[PanelConfig]:
@@ -339,6 +340,68 @@ def _panels_inputs(cfg: SimulationConfig) -> SolarArrayConfig:
                 rotation_axis = (ax, ay, az)
             else:
                 rotation_axis = default.rotation_axis_body
+            twist_enabled = False
+            gimbal_min_deg = None
+            gimbal_max_deg = None
+            max_slew_rate_deg_s = default.max_slew_rate_deg_s
+            if mounting is PanelMounting.ONE_AXIS:
+                twist_enabled = st.checkbox(
+                    "Twist-cap gimbal",
+                    value=default.gimbal_min_deg is not None,
+                    key="ptwist0",
+                    help=(
+                        "Limit accumulated gimbal travel. At a limit, the array unwinds "
+                        "toward a 360°-equivalent Sun-tracking angle."
+                    ),
+                )
+                if twist_enabled:
+                    cols = st.columns(3)
+                    entered_min = cols[0].number_input(
+                        "Minimum angle (deg)",
+                        value=float(
+                            default.gimbal_min_deg
+                            if default.gimbal_min_deg is not None
+                            else -270.0
+                        ),
+                        step=10.0,
+                        key="pgmin0",
+                    )
+                    entered_max = cols[1].number_input(
+                        "Maximum angle (deg)",
+                        value=float(
+                            default.gimbal_max_deg
+                            if default.gimbal_max_deg is not None
+                            else 270.0
+                        ),
+                        step=10.0,
+                        key="pgmax0",
+                    )
+                    max_slew_rate_deg_s = cols[2].number_input(
+                        "Max slew (deg/s)",
+                        min_value=0.001,
+                        value=float(default.max_slew_rate_deg_s),
+                        step=0.1,
+                        format="%.3f",
+                        key="pslew0",
+                    )
+                    if entered_min > 0.0 or entered_max < 0.0 or entered_max - entered_min < 360.0:
+                        st.error(
+                            "Twist limits must contain 0° and span at least 360°. "
+                            "The last valid limits remain active."
+                        )
+                        gimbal_min_deg = (
+                            default.gimbal_min_deg
+                            if default.gimbal_min_deg is not None
+                            else -180.0
+                        )
+                        gimbal_max_deg = (
+                            default.gimbal_max_deg
+                            if default.gimbal_max_deg is not None
+                            else 180.0
+                        )
+                    else:
+                        gimbal_min_deg = entered_min
+                        gimbal_max_deg = entered_max
             eff = st.number_input(
                 "Cell efficiency##p0",
                 0.05,
@@ -394,6 +457,9 @@ def _panels_inputs(cfg: SimulationConfig) -> SolarArrayConfig:
                 normal_body=normal_body,
                 mounting=mounting,
                 rotation_axis_body=rotation_axis,
+                gimbal_min_deg=gimbal_min_deg,
+                gimbal_max_deg=gimbal_max_deg,
+                max_slew_rate_deg_s=max_slew_rate_deg_s,
                 cell_efficiency=eff,
                 packing_factor=pack,
                 inherent_degradation=inherent,
@@ -1477,18 +1543,14 @@ def _render_frames(df: pd.DataFrame) -> None:
     display_rot = _orbit_display_rotation(h_display_ref, u_sun_k[K // 2])
     r_display_k = (display_rot @ r_k.T).T
 
-    # Panel geometry per time step (ECI first, then body-frame via R^T).
-    n_panels = len(cfg.solar_array.panels)
-    normal_eci_k = np.zeros((n_panels, K, 3))
-    edge_eci_k = np.zeros((n_panels, K, 3))
-    cos_k = np.zeros((n_panels, K))
-    angle_k = np.zeros((n_panels, K))
-    for i, panel in enumerate(cfg.solar_array.panels):
-        pf = panel_frames_eci(panel, rot_k, u_sun_k)
-        normal_eci_k[i] = pf["normal_eci"]
-        edge_eci_k[i] = pf["edge_eci"]
-        cos_k[i] = pf["cos_incidence"]
-        angle_k[i] = pf["angle_deg"]
+    # Panel geometry comes from the full simulation so twist-limited gimbals
+    # retain their state across orbit and animation slices.
+    normal_eci_k = np.asarray(df.attrs["panel_normal_eci"])[:, frame_indices, :]
+    edge_eci_k = np.asarray(df.attrs["panel_edge_eci"])[:, frame_indices, :]
+    cos_k = np.asarray(df.attrs["panel_cos_incidence"])[:, frame_indices]
+    angle_k = np.asarray(df.attrs["panel_angle_deg"])[:, frame_indices]
+    target_angle_k = np.asarray(df.attrs["panel_target_angle_deg"])[:, frame_indices]
+    rewinding_k = np.asarray(df.attrs["panel_rewinding"])[:, frame_indices]
     normal_body_k = np.einsum("nji,pnj->pni", rot_k, normal_eci_k)
     edge_body_k = np.einsum("nji,pnj->pni", rot_k, edge_eci_k)
 
@@ -1791,9 +1853,46 @@ def _render_frames(df: pd.DataFrame) -> None:
         )
         fig_g = px.line(
             gimbal_df,
-            title="Gimbal / slew angle per tracking panel (deg)",
-            labels={"value": "Angle (deg)", "variable": "Panel"},
+            title="Actual gimbal / slew angle per tracking panel (deg)",
+            labels={"value": "Actual angle (deg)", "variable": "Panel"},
         )
+        for i, panel in enumerate(cfg.solar_array.panels):
+            if panel.mounting is not PanelMounting.ONE_AXIS or panel.gimbal_min_deg is None:
+                continue
+            fig_g.add_trace(
+                go.Scatter(
+                    x=minutes_k,
+                    y=target_angle_k[i],
+                    name=f"{panel.name} target",
+                    mode="lines",
+                    line=dict(dash="dot"),
+                )
+            )
+            fig_g.add_hline(
+                y=panel.gimbal_min_deg,
+                line=dict(color="firebrick", dash="dash"),
+                annotation_text=f"{panel.name} min",
+            )
+            fig_g.add_hline(
+                y=panel.gimbal_max_deg,
+                line=dict(color="firebrick", dash="dash"),
+                annotation_text=f"{panel.name} max",
+            )
+        rewinding_any = np.any(rewinding_k, axis=0)
+        if np.any(rewinding_any):
+            starts = np.flatnonzero(rewinding_any & ~np.r_[False, rewinding_any[:-1]])
+            ends = np.flatnonzero(rewinding_any & ~np.r_[rewinding_any[1:], False])
+            for j, (start, end) in enumerate(zip(starts, ends, strict=True)):
+                fig_g.add_vrect(
+                    x0=float(minutes_k[start]),
+                    x1=float(minutes_k[end]),
+                    fillcolor="orange",
+                    opacity=0.12,
+                    line_width=0,
+                    layer="below",
+                    annotation_text="rewind" if j == 0 else None,
+                    annotation_position="top left",
+                )
         _shade_eclipse(fig_g, minutes_k, in_eclipse_k)
         fig_g.update_layout(height=300, legend=dict(orientation="h"))
         st.plotly_chart(fig_g, width='stretch')
@@ -1840,9 +1939,11 @@ def _render_frames(df: pd.DataFrame) -> None:
             )
             desc = f"fixed {face_label}, incidence {inc_deg:.1f} deg"
         elif panel.mounting is PanelMounting.ONE_AXIS:
+            rewind_label = ", REWINDING" if rewinding_k[i_p, insp] else ""
             desc = (
                 f"1-axis about {panel.rotation_axis_body}, incidence {inc_deg:.1f} deg, "
-                f"gimbal {float(angle_k[i_p, insp]):+.1f} deg"
+                f"gimbal {float(angle_k[i_p, insp]):+.1f} deg, "
+                f"target {float(target_angle_k[i_p, insp]):+.1f} deg{rewind_label}"
             )
         else:
             desc = f"2-axis -> Sun, slew {float(angle_k[i_p, insp]):.1f} deg"

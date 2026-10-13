@@ -99,6 +99,9 @@ class PanelConfig(BaseModel):
     normal_body: tuple[float, float, float] = (0.0, 0.0, 1.0)
     mounting: PanelMounting = PanelMounting.ONE_AXIS
     rotation_axis_body: tuple[float, float, float] = (0.0, 1.0, 0.0)
+    gimbal_min_deg: float | None = None
+    gimbal_max_deg: float | None = None
+    max_slew_rate_deg_s: float = Field(1.0, gt=0.0)
     cell_efficiency: float = Field(0.30, gt=0.0, le=1.0)
     packing_factor: float = Field(0.85, gt=0.0, le=1.0)
     inherent_degradation: float = Field(0.77, gt=0.0, le=1.0)
@@ -110,6 +113,16 @@ class PanelConfig(BaseModel):
     def _apply_face(self) -> PanelConfig:
         if self.normal_face != "custom":
             object.__setattr__(self, "normal_body", BODY_FACES[self.normal_face])
+        limits = (self.gimbal_min_deg, self.gimbal_max_deg)
+        if (limits[0] is None) != (limits[1] is None):
+            raise ValueError("gimbal minimum and maximum must be supplied together")
+        if limits[0] is not None and limits[1] is not None:
+            if self.mounting is not PanelMounting.ONE_AXIS:
+                raise ValueError("gimbal twist limits are only supported for 1-axis panels")
+            if not limits[0] <= 0.0 <= limits[1]:
+                raise ValueError("gimbal limits must contain the 0 deg rest position")
+            if limits[1] - limits[0] < 360.0:
+                raise ValueError("gimbal limits must span at least 360 deg")
         return self
 
 

@@ -2,10 +2,69 @@
 
 from __future__ import annotations
 
+import numpy as np
 import pytest
 
-from app import _default_wing_side_axis, _solar_array_summary, _symmetric_wing_panels
+from app import (
+    _default_wing_side_axis,
+    _orbit_display_rotation,
+    _solar_array_summary,
+    _symmetric_wing_panels,
+    _velocity_fixed_display_rotation,
+)
 from energy_balance import PanelConfig, PanelMounting, SolarArrayConfig
+
+
+@pytest.mark.parametrize("beta_deg", [-35.0, 0.0, 42.0])
+def test_orbit_display_rotation_makes_beta_visible(beta_deg):
+    beta = np.deg2rad(beta_deg)
+    orbit_normal = np.array([0.2, -0.4, 0.7])
+    orbit_normal /= np.linalg.norm(orbit_normal)
+    in_plane = np.array([1.0, 0.5, 0.0])
+    in_plane -= np.dot(in_plane, orbit_normal) * orbit_normal
+    in_plane /= np.linalg.norm(in_plane)
+    sun = np.cos(beta) * in_plane + np.sin(beta) * orbit_normal
+
+    rotation = _orbit_display_rotation(orbit_normal, sun)
+
+    np.testing.assert_allclose(rotation @ rotation.T, np.eye(3), atol=1e-12)
+    np.testing.assert_allclose(rotation @ orbit_normal, [0.0, 0.0, 1.0], atol=1e-12)
+    np.testing.assert_allclose(
+        rotation @ sun,
+        [np.cos(beta), 0.0, np.sin(beta)],
+        atol=1e-12,
+    )
+
+
+def test_orbit_display_rotation_is_stable_at_polar_sun():
+    orbit_normal = np.array([0.0, 0.0, 1.0])
+
+    rotation = _orbit_display_rotation(orbit_normal, orbit_normal)
+
+    np.testing.assert_allclose(rotation @ rotation.T, np.eye(3), atol=1e-12)
+    np.testing.assert_allclose(rotation @ orbit_normal, [0.0, 0.0, 1.0], atol=1e-12)
+
+
+def test_velocity_fixed_display_rotation_holds_velocity_along_positive_x():
+    velocity = np.array([0.4, -0.8, 0.3])
+    orbit_normal = np.array([0.2, 0.4, 0.8])
+    velocity -= np.dot(velocity, orbit_normal) / np.dot(
+        orbit_normal, orbit_normal,
+    ) * orbit_normal
+
+    rotation = _velocity_fixed_display_rotation(velocity, orbit_normal)
+
+    np.testing.assert_allclose(rotation @ rotation.T, np.eye(3), atol=1e-12)
+    np.testing.assert_allclose(
+        rotation @ (velocity / np.linalg.norm(velocity)),
+        [1.0, 0.0, 0.0],
+        atol=1e-12,
+    )
+    np.testing.assert_allclose(
+        rotation @ (orbit_normal / np.linalg.norm(orbit_normal)),
+        [0.0, 0.0, 1.0],
+        atol=1e-12,
+    )
 
 
 @pytest.mark.parametrize(

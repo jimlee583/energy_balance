@@ -895,6 +895,54 @@ def _render_seasonal(cfg: SimulationConfig) -> None:
 # --------------------------------------------------------------------------------------
 
 
+def _orbit_display_rotation(h_eci: np.ndarray, u_sun_eci: np.ndarray) -> np.ndarray:
+    """Return an ECI-to-display rotation for an edge-on beta-angle view.
+
+    Display +X follows the Sun's projection into the orbit plane, display +Z
+    follows the orbit normal, and +Y completes the right-handed frame. Looking
+    approximately along -Y makes the orbit plane horizontal and puts the Sun
+    above or below it according to the signed beta angle.
+    """
+    z_axis = np.asarray(h_eci, dtype=float)
+    z_axis /= max(float(np.linalg.norm(z_axis)), 1e-12)
+
+    sun = np.asarray(u_sun_eci, dtype=float)
+    sun /= max(float(np.linalg.norm(sun)), 1e-12)
+    x_axis = sun - float(np.dot(sun, z_axis)) * z_axis
+    x_norm = float(np.linalg.norm(x_axis))
+    if x_norm < 1e-9:
+        # At beta ~= +/-90 deg the Sun has no in-plane projection. Choose the
+        # least-aligned ECI axis so the view remains deterministic and stable.
+        fallback = np.eye(3)[int(np.argmin(np.abs(z_axis)))]
+        x_axis = fallback - float(np.dot(fallback, z_axis)) * z_axis
+        x_norm = float(np.linalg.norm(x_axis))
+    x_axis /= max(x_norm, 1e-12)
+    y_axis = np.cross(z_axis, x_axis)
+    y_axis /= max(float(np.linalg.norm(y_axis)), 1e-12)
+    return np.stack((x_axis, y_axis, z_axis), axis=0)
+
+
+def _velocity_fixed_display_rotation(
+    velocity_eci: np.ndarray,
+    orbit_normal_eci: np.ndarray,
+) -> np.ndarray:
+    """Return an ECI-to-display rotation with velocity fixed along display +X."""
+    z_axis = np.asarray(orbit_normal_eci, dtype=float)
+    z_axis /= max(float(np.linalg.norm(z_axis)), 1e-12)
+
+    velocity = np.asarray(velocity_eci, dtype=float)
+    x_axis = velocity - float(np.dot(velocity, z_axis)) * z_axis
+    x_norm = float(np.linalg.norm(x_axis))
+    if x_norm < 1e-9:
+        fallback = np.eye(3)[int(np.argmin(np.abs(z_axis)))]
+        x_axis = fallback - float(np.dot(fallback, z_axis)) * z_axis
+        x_norm = float(np.linalg.norm(x_axis))
+    x_axis /= max(x_norm, 1e-12)
+    y_axis = np.cross(z_axis, x_axis)
+    y_axis /= max(float(np.linalg.norm(y_axis)), 1e-12)
+    return np.stack((x_axis, y_axis, z_axis), axis=0)
+
+
 def _unit_cube() -> tuple[np.ndarray, np.ndarray]:
     """Return (vertices, triangle indices) for a unit cube centered at the origin."""
     v = np.array(
@@ -1348,14 +1396,16 @@ def _render_frames(df: pd.DataFrame) -> None:
     cfg: SimulationConfig = df.attrs["config"]
     st.caption(
         "Earth-centered orbit view (left) and a satellite close-up (right), animated across the "
-        "chosen orbit. Each configured panel is drawn with its tracked normal: fixed panels sit "
+        "chosen orbit. The left view is oriented with the orbit nearly edge-on and horizontal, "
+        "so the Sun appears above or below the orbit according to beta angle. "
+        "Each configured panel is drawn with its tracked normal: fixed panels sit "
         "flush on their bus face, 1-axis arrays rotate about their gimbal axis to maximise sun "
         "incidence, and 2-axis arrays always face the Sun. Plates brighten as they face the Sun "
         "and darken in eclipse. In body-fixed close-up mode the Sun arrow sweeps around the "
-        "satellite over the orbit; in inertial mode the satellite tumbles while the arrays stay "
-        "pointed at the Sun. The inertial close-up draws a rectangular solar ray out the plus "
-        "and minus side of each array, with a yellow arrow normal to that rectangle and pointed "
-        "at the Sun. 1-axis "
+        "satellite over the orbit; in velocity-fixed mode the velocity arrow stays along +X "
+        "while the satellite and Sun direction rotate around it. The velocity-fixed close-up "
+        "draws a rectangular solar ray out the plus and minus side of each array, with a yellow "
+        "arrow normal to that rectangle and pointed at the Sun. 1-axis "
         "arrays continue to track the geometric Sun direction while in eclipse (no rest-mode "
         "command is modeled)."
     )
@@ -1373,9 +1423,9 @@ def _render_frames(df: pd.DataFrame) -> None:
     frames_target = int(c2.slider("Frames per orbit", min_value=20, max_value=240, value=90, step=5))
     frame_ms = int(c3.slider("Frame duration (ms)", min_value=20, max_value=400, value=80, step=10))
     close_up_mode = c4.radio(
-        "Close-up frame", ["Body-fixed", "Inertial"], index=0, horizontal=True,
+        "Close-up frame", ["Body-fixed", "Velocity-fixed"], index=0, horizontal=True,
         help="Body-fixed: satellite is stationary and the Sun arrow sweeps. "
-             "Inertial: satellite rotates in ECI while arrays stay on the Sun.",
+             "Velocity-fixed: velocity stays along +X while the satellite and Sun direction rotate.",
     )
 
     ck = st.columns(4)
@@ -1422,6 +1472,10 @@ def _render_frames(df: pd.DataFrame) -> None:
     v_hat_eci_k = v_k / np.linalg.norm(v_k, axis=-1, keepdims=True)
     h_eci_k = np.cross(r_k, v_k)
     h_hat_eci_k = h_eci_k / np.linalg.norm(h_eci_k, axis=-1, keepdims=True)
+    h_display_ref = np.mean(h_hat_eci_k, axis=0)
+    h_display_ref /= max(float(np.linalg.norm(h_display_ref)), 1e-12)
+    display_rot = _orbit_display_rotation(h_display_ref, u_sun_k[K // 2])
+    r_display_k = (display_rot @ r_k.T).T
 
     # Panel geometry per time step (ECI first, then body-frame via R^T).
     n_panels = len(cfg.solar_array.panels)
@@ -1477,14 +1531,17 @@ def _render_frames(df: pd.DataFrame) -> None:
     ]
     r_orbit_full = r_all[orbit_numbers == orbit_sel]
     if len(r_orbit_full) > 1:
+        r_orbit_display = (display_rot @ r_orbit_full.T).T
         static_s1.append(
             go.Scatter3d(
-                x=r_orbit_full[:, 0], y=r_orbit_full[:, 1], z=r_orbit_full[:, 2],
+                x=r_orbit_display[:, 0],
+                y=r_orbit_display[:, 1],
+                z=r_orbit_display[:, 2],
                 mode="lines", line=dict(color="orange", width=3),
                 name=f"Orbit {orbit_sel}", hoverinfo="name", scene="scene",
             )
         )
-    sun_mid = u_sun_k[K // 2]
+    sun_mid = display_rot @ u_sun_k[K // 2]
     sun_pos = sun_mid * sun_distance_s1
     static_s1.append(
         go.Scatter3d(
@@ -1517,10 +1574,10 @@ def _render_frames(df: pd.DataFrame) -> None:
     trail_window = max(1, K // 8)
 
     def _frame_traces(k: int) -> tuple[list[go.BaseTraceType], list[go.BaseTraceType]]:
-        trail = r_k[max(0, k - trail_window):k + 1] if show_trail else None
+        trail = r_display_k[max(0, k - trail_window):k + 1] if show_trail else None
         s1 = _satellite_frame_traces(
-            center=r_k[k],
-            rot_display=rot_k[k],
+            center=r_display_k[k],
+            rot_display=display_rot @ rot_k[k],
             sat_scale=sat_scale_s1,
             cfg=cfg,
             panel_normal_body=normal_body_k[:, k, :],
@@ -1539,7 +1596,13 @@ def _render_frames(df: pd.DataFrame) -> None:
             boom_width=4,
             trail_display=trail,
         )
-        rot_display = np.eye(3) if close_up_mode == "Body-fixed" else rot_k[k]
+        if close_up_mode == "Body-fixed":
+            rot_display = np.eye(3)
+        else:
+            eci_to_velocity = _velocity_fixed_display_rotation(
+                v_hat_eci_k[k], h_hat_eci_k[k],
+            )
+            rot_display = eci_to_velocity @ rot_k[k]
         s2 = _satellite_frame_traces(
             center=np.zeros(3),
             rot_display=rot_display,
@@ -1560,7 +1623,7 @@ def _render_frames(df: pd.DataFrame) -> None:
             panel_plate_scale=1.0,
             boom_width=4,
             trail_display=None,
-            draw_solar_rays=(close_up_mode == "Inertial"),
+            draw_solar_rays=(close_up_mode == "Velocity-fixed"),
         )
         return s1, s2
 
@@ -1654,7 +1717,11 @@ def _render_frames(df: pd.DataFrame) -> None:
         scene=dict(
             aspectmode="cube", bgcolor="rgba(0,0,0,0)",
             domain=dict(y=[0.0, scene_top]),
-            camera=dict(eye=dict(x=1.35, y=1.35, z=0.95), center=dict(x=0, y=0, z=0)),
+            camera=dict(
+                eye=dict(x=0.0, y=-2.4, z=0.35),
+                up=dict(x=0, y=0, z=1),
+                center=dict(x=0, y=0, z=0),
+            ),
             xaxis=blank_axis_s1, yaxis=blank_axis_s1, zaxis=blank_axis_s1,
         ),
         scene2=dict(

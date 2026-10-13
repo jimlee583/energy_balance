@@ -1828,17 +1828,22 @@ def _render_frames(df: pd.DataFrame) -> None:
     in_eclipse_k = illum_k < 0.01
     panel_names = [p.name for p in cfg.solar_array.panels]
 
+    # Suppress floating-point noise at the physical bounds so Plotly does not
+    # auto-zoom into differences on the order of 1e-14.
+    cos_display = np.where(np.isclose(cos_k, 1.0, atol=1e-12), 1.0, cos_k)
+    cos_display = np.where(np.isclose(cos_display, 0.0, atol=1e-12), 0.0, cos_display)
     cos_df = pd.DataFrame(
-        {name: cos_k[i] for i, name in enumerate(panel_names)},
+        {name: cos_display[i] for i, name in enumerate(panel_names)},
         index=pd.Index(minutes_k, name="Minutes since orbit start"),
     )
     fig_cos = px.line(
         cos_df,
-        title="cos(incidence angle) per panel",
+        title="Cosine of incidence angle per panel",
         labels={"value": "cos(incidence)", "variable": "Panel"},
     )
     _shade_eclipse(fig_cos, minutes_k, in_eclipse_k)
     fig_cos.update_layout(height=320, legend=dict(orientation="h"))
+    fig_cos.update_yaxes(range=[0.0, 1.02], tick0=0.0, dtick=0.25, tickformat=".2f")
     st.plotly_chart(fig_cos, width='stretch')
 
     tracking_pairs = [

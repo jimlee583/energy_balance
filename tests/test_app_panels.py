@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from app import _default_wing_side_axis, _symmetric_wing_panels
-from energy_balance import PanelConfig, PanelMounting
+from app import _default_wing_side_axis, _solar_array_summary, _symmetric_wing_panels
+from energy_balance import PanelConfig, PanelMounting, SolarArrayConfig
 
 
 @pytest.mark.parametrize(
@@ -53,3 +53,20 @@ def test_default_wing_side_axis_uses_stored_panel_axis(axis, expected):
     panel = PanelConfig(rotation_axis_body=axis)
 
     assert _default_wing_side_axis(panel) == expected
+
+
+def test_solar_array_summary_describes_paired_wings_and_total_area():
+    array = SolarArrayConfig(
+        panels=[
+            PanelConfig(area_m2=4.0, rotation_axis_body=(0.0, 1.0, 0.0)),
+            PanelConfig(area_m2=4.0, rotation_axis_body=(0.0, 1.0, 0.0)),
+        ]
+    )
+
+    assert _solar_array_summary(array) == "2 panels (±Y), 8.0 m²"
+
+
+def test_solar_array_summary_describes_single_panel():
+    array = SolarArrayConfig(panels=[PanelConfig(area_m2=2.5)])
+
+    assert _solar_array_summary(array) == "1 panel, 2.5 m²"

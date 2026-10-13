@@ -231,6 +231,19 @@ def _default_wing_side_axis(panel: PanelConfig) -> str:
     return "±X" if axis[0] > axis[1] else "±Y"
 
 
+def _solar_array_summary(array: SolarArrayConfig) -> str:
+    """Return a compact description of the configured solar-array size."""
+    panel_count = len(array.panels)
+    panel_label = "panel" if panel_count == 1 else "panels"
+    side_axis = (
+        f" ({_default_wing_side_axis(array.panels[0])})"
+        if panel_count == 2
+        else ""
+    )
+    total_area_m2 = sum(panel.area_m2 for panel in array.panels)
+    return f"{panel_count} {panel_label}{side_axis}, {total_area_m2:,.1f} m²"
+
+
 def _symmetric_wing_panels(shared: PanelConfig, side_axis: str) -> list[PanelConfig]:
     """Create equal-area wings on opposite sides of the selected body axis."""
     axis = _WING_SIDE_AXES[side_axis]
@@ -566,7 +579,36 @@ def _cached_simulate(config_json: str) -> pd.DataFrame:
 
 
 def _render_summary(df: pd.DataFrame) -> None:
+    cfg: SimulationConfig = df.attrs["config"]
     m = compute_metrics(df)
+
+    st.subheader("System configuration")
+    c1, c2 = st.columns(2)
+    c1.metric("Solar array", _solar_array_summary(cfg.solar_array))
+    c2.metric("Battery capacity", f"{cfg.battery.capacity_wh:,.0f} Wh")
+
+    loads_df = pd.DataFrame(
+        [
+            {
+                "Load": load.name,
+                "Power (W)": load.power_w,
+                "Mode": load.mode.value.replace("_", " ").capitalize(),
+                "Duty cycle (%)": load.duty_percent,
+            }
+            for load in cfg.loads
+        ]
+    )
+    st.markdown("**Loads**")
+    st.dataframe(
+        loads_df,
+        width="stretch",
+        hide_index=True,
+        column_config={
+            "Power (W)": st.column_config.NumberColumn(format="%.1f"),
+            "Duty cycle (%)": st.column_config.NumberColumn(format="%.1f"),
+        },
+    )
+
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Period (min)", f"{m.period_s / 60:.2f}")
     c2.metric("Inclination (deg)", f"{m.inclination_deg:.2f}")

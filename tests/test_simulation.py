@@ -10,6 +10,7 @@ from energy_balance import (
     AttitudeConfig,
     AttitudeMode,
     BatteryConfig,
+    BusArchitecture,
     LoadConfig,
     LoadMode,
     MissionConfig,
@@ -52,6 +53,24 @@ def test_config_round_trip(tmp_path):
     assert loaded.model_dump() == cfg.model_dump()
 
 
+def test_legacy_config_defaults_to_8s_battery_dominated_bus():
+    data = SimulationConfig().model_dump()
+    del data["power_system"]["bus_architecture"]
+    for field in (
+        "empty_ocv_v",
+        "full_ocv_v",
+        "internal_resistance_ohm",
+        "minimum_bus_voltage_v",
+    ):
+        del data["battery"][field]
+
+    loaded = SimulationConfig.model_validate(data)
+
+    assert loaded.power_system.bus_architecture is BusArchitecture.BATTERY_DOMINATED
+    assert loaded.battery.empty_ocv_v == 24.0
+    assert loaded.battery.full_ocv_v == 33.6
+
+
 def test_two_axis_tracking_panel_always_full_power_in_sunlight():
     cfg = SimulationConfig(
         name="tracking-check",
@@ -92,6 +111,23 @@ def test_mission_epoch_is_tz_aware():
     reloaded = SimulationConfig.model_validate(data)
     assert reloaded.mission.epoch.tzinfo is not None
     assert reloaded.mission.epoch.tzinfo.utcoffset(reloaded.mission.epoch) == UTC.utcoffset(reloaded.mission.epoch)
+
+
+def test_simulation_exposes_battery_dominated_bus_diagnostics():
+    cfg = SimulationConfig(
+        mission=MissionConfig(duration_days=0.05, time_step_s=60.0),
+    )
+
+    df = run_simulation(cfg)
+
+    for column in (
+        "bus_voltage_v",
+        "battery_current_a",
+        "battery_power_w",
+        "voltage_limited_w",
+    ):
+        assert column in df
+    assert np.all(np.isfinite(df["bus_voltage_v"]))
 
 
 def test_simulation_exposes_twist_cap_trajectory_diagnostics():

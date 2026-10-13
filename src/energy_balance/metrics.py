@@ -21,8 +21,10 @@ class SimulationMetrics:
     energy_out_wh: float
     energy_shunted_wh: float
     energy_unmet_wh: float
+    energy_voltage_limited_wh: float
     min_soc_percent: float
     max_dod_percent_observed: float
+    min_bus_voltage_v: float
     worst_orbit: int
     beta_min_deg: float
     beta_max_deg: float
@@ -58,6 +60,7 @@ def compute_metrics(df: pd.DataFrame) -> SimulationMetrics:
     energy_out = float(np.sum(df["load_w"]) * dt_h)
     energy_shunt = float(np.sum(df["shunt_w"]) * dt_h)
     energy_unmet = float(np.sum(df["unmet_w"]) * dt_h)
+    energy_voltage_limited = float(np.sum(df["voltage_limited_w"]) * dt_h)
 
     orbit_summary = _orbit_summary(df, dt_s)
     # Discard a partial last orbit if present.
@@ -72,6 +75,14 @@ def compute_metrics(df: pd.DataFrame) -> SimulationMetrics:
     min_soc = float(df["soc_percent"].min())
     max_dod = 100.0 - min_soc
     dod_limit = config.battery.max_dod_percent
+    finite_bus_voltage = df["bus_voltage_v"].dropna()
+    min_bus_voltage = (
+        float(finite_bus_voltage.min()) if len(finite_bus_voltage) else float("nan")
+    )
+    bus_voltage_within_limit = bool(
+        not len(finite_bus_voltage)
+        or min_bus_voltage >= config.battery.minimum_bus_voltage_v - 1e-9
+    )
 
     orbit_recovers = bool(
         full_orbits.get("min_soc_percent", pd.Series(dtype=float)).iloc[-1] > 95.0
@@ -83,6 +94,7 @@ def compute_metrics(df: pd.DataFrame) -> SimulationMetrics:
         "power_budget_positive": power_budget_positive,
         "dod_within_limit": max_dod <= dod_limit,
         "no_unmet_load": energy_unmet < 1e-6,
+        "bus_voltage_within_limit": bus_voltage_within_limit,
         "battery_recovers_each_orbit": orbit_recovers,
         "overall_pass": (
             power_budget_positive
@@ -104,8 +116,10 @@ def compute_metrics(df: pd.DataFrame) -> SimulationMetrics:
         energy_out_wh=energy_out,
         energy_shunted_wh=energy_shunt,
         energy_unmet_wh=energy_unmet,
+        energy_voltage_limited_wh=energy_voltage_limited,
         min_soc_percent=min_soc,
         max_dod_percent_observed=max_dod,
+        min_bus_voltage_v=min_bus_voltage,
         worst_orbit=worst_orbit,
         beta_min_deg=float(df["beta_deg"].min()),
         beta_max_deg=float(df["beta_deg"].max()),

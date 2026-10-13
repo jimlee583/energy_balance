@@ -7,6 +7,7 @@ app simulates the satellite over many orbits and reports:
 
 - orbit facts: period, beta angle, RAAN drift, eclipse duration/fraction
 - time series of generated power, load power, net power, and battery state of charge
+- battery-dominated bus voltage and current, including internal-resistance sag
 - per-orbit energy totals and a worst-orbit summary
 - a pass/fail verdict against the depth-of-discharge limit and power budget
 - sizing hints for the minimum solar array area and battery capacity
@@ -48,6 +49,23 @@ tests/               # validation tests
 
 The physics is deliberately kept in a plain Python package with no Streamlit imports, so it
 can be reused from notebooks, scripts, or a CLI later.
+
+## Power regulation and bus architecture
+
+Solar regulation and bus architecture are modeled as separate choices:
+
+- **MPPT / Direct Energy Transfer (DET)** selects the solar-array power path.
+- **Regulated / Battery-dominated** selects how the bus voltage behaves.
+
+The default battery-dominated configuration represents a typical unregulated 8-series
+lithium-ion pack: 24.0 V empty open-circuit voltage, 33.6 V full open-circuit voltage,
+0.08 ohm equivalent pack resistance, and a 24.0 V minimum usable bus voltage. The simulator
+interpolates open-circuit voltage with state of charge, calculates terminal voltage and
+current under load, and reports demand that cannot be served without crossing the minimum
+voltage as unmet load.
+
+This is a pack-level energy and voltage model. In DET mode, the current version does not
+solve a solar-array I-V curve at the battery-clamped operating voltage.
 
 ## Twist-cap gimbals
 

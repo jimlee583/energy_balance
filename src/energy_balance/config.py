@@ -43,6 +43,11 @@ class Regulation(str, Enum):
     DET = "direct_energy_transfer"
 
 
+class BusArchitecture(str, Enum):
+    REGULATED = "regulated"
+    BATTERY_DOMINATED = "battery_dominated"
+
+
 class OrbitSpec(str, Enum):
     ALTITUDES = "perigee_apogee_altitudes"
     SEMI_LATUS = "semi_major_axis_eccentricity"
@@ -155,10 +160,39 @@ class BatteryConfig(BaseModel):
     charge_efficiency: float = Field(0.95, gt=0.0, le=1.0)
     discharge_efficiency: float = Field(0.98, gt=0.0, le=1.0)
     max_charge_rate_w: float = Field(500.0, gt=0.0)
+    empty_ocv_v: float = Field(
+        24.0,
+        gt=0.0,
+        description="Pack open-circuit voltage at 0% SOC (8s Li-ion default)",
+    )
+    full_ocv_v: float = Field(
+        33.6,
+        gt=0.0,
+        description="Pack open-circuit voltage at 100% SOC (8s Li-ion default)",
+    )
+    internal_resistance_ohm: float = Field(
+        0.08,
+        ge=0.0,
+        description="Equivalent pack series resistance",
+    )
+    minimum_bus_voltage_v: float = Field(
+        24.0,
+        gt=0.0,
+        description="Minimum usable bus voltage before load shedding",
+    )
+
+    @model_validator(mode="after")
+    def _check_pack_voltages(self) -> BatteryConfig:
+        if self.full_ocv_v <= self.empty_ocv_v:
+            raise ValueError("full battery OCV must be greater than empty battery OCV")
+        if self.minimum_bus_voltage_v > self.full_ocv_v:
+            raise ValueError("minimum bus voltage must not exceed full battery OCV")
+        return self
 
 
 class PowerSystemConfig(BaseModel):
     regulation: Regulation = Regulation.MPPT
+    bus_architecture: BusArchitecture = BusArchitecture.BATTERY_DOMINATED
     path_efficiency: float = Field(0.90, gt=0.0, le=1.0)
 
 

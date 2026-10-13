@@ -96,6 +96,10 @@ def run_simulation(config: SimulationConfig) -> pd.DataFrame:
             "soc_percent": battery["soc_percent"],
             "shunt_w": battery["shunt_w"],
             "unmet_w": battery["unmet_w"],
+            "bus_voltage_v": battery["bus_voltage_v"],
+            "battery_current_a": battery["battery_current_a"],
+            "battery_power_w": battery["battery_power_w"],
+            "voltage_limited_w": battery["voltage_limited_w"],
         }
     )
 

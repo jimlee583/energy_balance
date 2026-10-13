@@ -21,6 +21,7 @@ from energy_balance import (
     AttitudeConfig,
     AttitudeMode,
     BatteryConfig,
+    BusArchitecture,
     LoadConfig,
     LoadMode,
     MissionConfig,
@@ -523,7 +524,10 @@ def _loads_inputs(cfg: SimulationConfig) -> list[LoadConfig]:
     return loads
 
 
-def _battery_inputs(cfg: SimulationConfig) -> BatteryConfig:
+def _battery_inputs(
+    cfg: SimulationConfig,
+    bus_architecture: BusArchitecture,
+) -> BatteryConfig:
     with st.sidebar.expander("Battery", expanded=False):
         capacity = st.number_input(
             "Capacity (Wh)", 1.0, 100_000.0, float(cfg.battery.capacity_wh), step=10.0
@@ -543,6 +547,47 @@ def _battery_inputs(cfg: SimulationConfig) -> BatteryConfig:
         max_rate = st.number_input(
             "Max charge rate (W)", 1.0, 50_000.0, float(cfg.battery.max_charge_rate_w), step=10.0
         )
+        empty_ocv = cfg.battery.empty_ocv_v
+        full_ocv = cfg.battery.full_ocv_v
+        resistance = cfg.battery.internal_resistance_ohm
+        minimum_bus_voltage = cfg.battery.minimum_bus_voltage_v
+        if bus_architecture is BusArchitecture.BATTERY_DOMINATED:
+            st.markdown("**Battery-dominated bus voltage**")
+            st.caption(
+                "Defaults represent an 8-series Li-ion pack: 24.0-33.6 V."
+            )
+            empty_ocv = st.number_input(
+                "Empty-pack OCV (V)",
+                min_value=1.0,
+                value=float(empty_ocv),
+                step=0.1,
+            )
+            full_ocv = st.number_input(
+                "Full-pack OCV (V)",
+                min_value=1.0,
+                value=float(full_ocv),
+                step=0.1,
+            )
+            resistance = st.number_input(
+                "Pack internal resistance (Ω)",
+                min_value=0.0,
+                value=float(resistance),
+                step=0.01,
+                format="%.3f",
+            )
+            minimum_bus_voltage = st.number_input(
+                "Minimum bus voltage (V)",
+                min_value=1.0,
+                value=float(minimum_bus_voltage),
+                step=0.1,
+                help="Loads above the battery's voltage-limited capability are reported as unmet.",
+            )
+            if full_ocv <= empty_ocv:
+                st.error("Full-pack OCV must be greater than empty-pack OCV.")
+                full_ocv = empty_ocv + 0.1
+            if minimum_bus_voltage > full_ocv:
+                st.error("Minimum bus voltage must not exceed full-pack OCV.")
+                minimum_bus_voltage = full_ocv
     return BatteryConfig(
         capacity_wh=capacity,
         initial_soc_percent=soc0,
@@ -550,13 +595,31 @@ def _battery_inputs(cfg: SimulationConfig) -> BatteryConfig:
         charge_efficiency=eta_c,
         discharge_efficiency=eta_d,
         max_charge_rate_w=max_rate,
+        empty_ocv_v=empty_ocv,
+        full_ocv_v=full_ocv,
+        internal_resistance_ohm=resistance,
+        minimum_bus_voltage_v=minimum_bus_voltage,
     )
 
 
 def _power_system_inputs(cfg: SimulationConfig) -> PowerSystemConfig:
     with st.sidebar.expander("Power system", expanded=False):
+        bus_architecture = st.segmented_control(
+            "Bus architecture",
+            list(BusArchitecture),
+            default=cfg.power_system.bus_architecture,
+            required=True,
+            format_func=lambda architecture: {
+                BusArchitecture.REGULATED: "Regulated",
+                BusArchitecture.BATTERY_DOMINATED: "Battery-dominated",
+            }[architecture],
+            help=(
+                "A battery-dominated bus follows battery terminal voltage. "
+                "Solar regulation remains a separate selection."
+            ),
+        )
         reg = st.selectbox(
-            "Regulation",
+            "Solar regulation",
             list(Regulation),
             format_func=lambda r: {
                 Regulation.MPPT: "MPPT",
@@ -567,7 +630,11 @@ def _power_system_inputs(cfg: SimulationConfig) -> PowerSystemConfig:
         eff = st.number_input(
             "Path efficiency", 0.3, 1.0, float(cfg.power_system.path_efficiency), 0.01
         )
-    return PowerSystemConfig(regulation=reg, path_efficiency=eff)
+    return PowerSystemConfig(
+        regulation=reg,
+        bus_architecture=bus_architecture,
+        path_efficiency=eff,
+    )
 
 
 def _sidebar() -> SimulationConfig:
@@ -603,8 +670,8 @@ def _sidebar() -> SimulationConfig:
     attitude = _attitude_inputs(cfg)
     arrays = _panels_inputs(cfg)
     loads = _loads_inputs(cfg)
-    battery = _battery_inputs(cfg)
     power_system = _power_system_inputs(cfg)
+    battery = _battery_inputs(cfg, power_system.bus_architecture)
 
     new_cfg = SimulationConfig(
         name=cfg.name,
@@ -649,9 +716,17 @@ def _render_summary(df: pd.DataFrame) -> None:
     m = compute_metrics(df)
 
     st.subheader("System configuration")
-    c1, c2 = st.columns(2)
+    c1, c2, c3 = st.columns(3)
     c1.metric("Solar array", _solar_array_summary(cfg.solar_array))
     c2.metric("Battery capacity", f"{cfg.battery.capacity_wh:,.0f} Wh")
+    c3.metric(
+        "Bus architecture",
+        (
+            "Battery-dominated"
+            if cfg.power_system.bus_architecture is BusArchitecture.BATTERY_DOMINATED
+            else "Regulated"
+        ),
+    )
 
     loads_df = pd.DataFrame(
         [
@@ -690,8 +765,15 @@ def _render_summary(df: pd.DataFrame) -> None:
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Min SOC (%)", f"{m.min_soc_percent:.1f}")
     c2.metric("Max observed DOD (%)", f"{m.max_dod_percent_observed:.1f}")
-    c3.metric("Beta min (deg)", f"{m.beta_min_deg:.2f}")
-    c4.metric("Beta max (deg)", f"{m.beta_max_deg:.2f}")
+    c3.metric(
+        "Min bus voltage (V)",
+        f"{m.min_bus_voltage_v:.2f}" if np.isfinite(m.min_bus_voltage_v) else "N/A",
+    )
+    c4.metric("Voltage-limited (Wh)", f"{m.energy_voltage_limited_wh:,.2f}")
+
+    c1, c2 = st.columns(2)
+    c1.metric("Beta min (deg)", f"{m.beta_min_deg:.2f}")
+    c2.metric("Beta max (deg)", f"{m.beta_max_deg:.2f}")
 
     verdict = m.verdict
     overall = "PASS" if verdict["overall_pass"] else "FAIL"
@@ -790,7 +872,20 @@ def _render_power(df: pd.DataFrame) -> None:
 def _render_battery(df: pd.DataFrame) -> None:
     cfg: SimulationConfig = df.attrs["config"]
     dod_floor = 100.0 - cfg.battery.max_dod_percent
-    fig = make_subplots(rows=2, cols=1, shared_xaxes=True, subplot_titles=["Battery SOC (%)", "Shunt and unmet (W)"])
+    battery_dominated = (
+        cfg.power_system.bus_architecture is BusArchitecture.BATTERY_DOMINATED
+    )
+    subplot_titles = ["Battery SOC (%)"]
+    if battery_dominated:
+        subplot_titles.extend(["Bus voltage (V)", "Battery current (A)"])
+    subplot_titles.append("Shunt and unmet power (W)")
+    rows = len(subplot_titles)
+    fig = make_subplots(
+        rows=rows,
+        cols=1,
+        shared_xaxes=True,
+        subplot_titles=subplot_titles,
+    )
     fig.add_trace(
         go.Scatter(x=df["timestamp_utc"], y=df["soc_percent"], name="SOC", line=dict(color="royalblue")),
         row=1,
@@ -804,19 +899,67 @@ def _render_battery(df: pd.DataFrame) -> None:
         annotation_text=f"DoD limit ({dod_floor:.0f}%)",
         annotation_position="bottom right",
     )
+    power_row = 2
+    if battery_dominated:
+        fig.add_trace(
+            go.Scatter(
+                x=df["timestamp_utc"],
+                y=df["bus_voltage_v"],
+                name="Bus voltage",
+                line=dict(color="darkviolet"),
+            ),
+            row=2,
+            col=1,
+        )
+        fig.add_hline(
+            y=cfg.battery.minimum_bus_voltage_v,
+            line=dict(color="red", dash="dash"),
+            row=2,
+            col=1,
+            annotation_text="Minimum bus voltage",
+            annotation_position="bottom right",
+        )
+        fig.add_trace(
+            go.Scatter(
+                x=df["timestamp_utc"],
+                y=df["battery_current_a"],
+                name="Battery current",
+                line=dict(color="teal"),
+            ),
+            row=3,
+            col=1,
+        )
+        power_row = 4
     fig.add_trace(
         go.Scatter(x=df["timestamp_utc"], y=df["shunt_w"], name="Shunt", fill="tozeroy", line=dict(color="goldenrod")),
-        row=2,
+        row=power_row,
         col=1,
     )
     fig.add_trace(
         go.Scatter(x=df["timestamp_utc"], y=df["unmet_w"], name="Unmet load", fill="tozeroy", line=dict(color="firebrick")),
-        row=2,
+        row=power_row,
         col=1,
     )
+    if battery_dominated:
+        fig.add_trace(
+            go.Scatter(
+                x=df["timestamp_utc"],
+                y=df["voltage_limited_w"],
+                name="Voltage-limited",
+                line=dict(color="crimson", dash="dot"),
+            ),
+            row=power_row,
+            col=1,
+        )
     fig.update_yaxes(title_text="%", row=1, col=1, range=[0, 101])
-    fig.update_yaxes(title_text="W", row=2, col=1)
-    fig.update_layout(height=550, legend=dict(orientation="h"))
+    if battery_dominated:
+        fig.update_yaxes(title_text="V", row=2, col=1)
+        fig.update_yaxes(title_text="A", row=3, col=1)
+    fig.update_yaxes(title_text="W", row=power_row, col=1)
+    fig.update_layout(
+        height=800 if battery_dominated else 550,
+        legend=dict(orientation="h"),
+    )
     st.plotly_chart(fig, width='stretch')
 
     st.subheader("Beta angle")

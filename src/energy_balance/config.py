@@ -130,18 +130,18 @@ class SolarArrayConfig(BaseModel):
 
 class LoadConfig(BaseModel):
     name: str = "Payload"
-    power_w: float = Field(300.0, ge=0.0)
+    power_w: float = Field(800.0, ge=0.0)
     mode: LoadMode = LoadMode.ALWAYS
     duty_percent: float = Field(100.0, ge=0.0, le=100.0)
 
 
 class BatteryConfig(BaseModel):
-    capacity_wh: float = Field(400.0, gt=0.0)
+    capacity_wh: float = Field(1000.0, gt=0.0)
     initial_soc_percent: float = Field(100.0, ge=0.0, le=100.0)
     max_dod_percent: float = Field(30.0, ge=0.0, le=100.0, description="Allowed depth of discharge")
     charge_efficiency: float = Field(0.95, gt=0.0, le=1.0)
     discharge_efficiency: float = Field(0.98, gt=0.0, le=1.0)
-    max_charge_rate_w: float = Field(200.0, gt=0.0)
+    max_charge_rate_w: float = Field(500.0, gt=0.0)
 
 
 class PowerSystemConfig(BaseModel):

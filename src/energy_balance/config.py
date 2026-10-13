@@ -93,7 +93,7 @@ class AttitudeConfig(BaseModel):
 
 class PanelConfig(BaseModel):
     name: str = "Panel"
-    area_m2: float = Field(1.0, gt=0.0)
+    area_m2: float = Field(4.0, gt=0.0)
     # Rest normal is +Z so it stays perpendicular to the default +Y drive axis.
     normal_face: Literal["+X", "-X", "+Y", "-Y", "+Z", "-Z", "custom"] = "+Z"
     normal_body: tuple[float, float, float] = (0.0, 0.0, 1.0)

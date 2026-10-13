@@ -237,7 +237,7 @@ def _panels_inputs(cfg: SimulationConfig) -> SolarArrayConfig:
             key="n_arrays",
         )
         # Slot 0 is starboard (+Y), slot 1 is port (-Y). A new array uses the
-        # PanelConfig default: 1-axis about +Y with a +Z rest normal.
+        # PanelConfig default: 4 m^2, 1-axis about +Y, +Z rest normal.
         sides = ["Starboard (+Y)", "Port (-Y)"]
         panels = []
         for i in range(n_panels):

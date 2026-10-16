@@ -968,84 +968,6 @@ def _render_battery(df: pd.DataFrame) -> None:
     st.plotly_chart(fig_b, width='stretch')
 
 
-def _render_orbit(df: pd.DataFrame) -> None:
-    r = df.attrs.get("r_eci_km")
-    if r is None:
-        st.info("No ECI positions available.")
-        return
-    r_eci = np.asarray(r)
-    r_sun = df.attrs.get("sun_eci_km")
-
-    # 3D orbit view (first orbit only to keep plot light)
-    period_s = df.attrs.get("period_s", 90 * 60)
-    one_orbit_mask = df["time_s"] <= period_s * 1.05
-    r_show = r_eci[one_orbit_mask.values]
-
-    fig3d = go.Figure()
-    # Earth sphere.
-    phi = np.linspace(0, np.pi, 25)
-    theta = np.linspace(0, 2 * np.pi, 40)
-    px_grid, py_grid = np.meshgrid(theta, phi)
-    xe = R_EARTH_KM * np.sin(py_grid) * np.cos(px_grid)
-    ye = R_EARTH_KM * np.sin(py_grid) * np.sin(px_grid)
-    ze = R_EARTH_KM * np.cos(py_grid)
-    fig3d.add_trace(
-        go.Surface(x=xe, y=ye, z=ze, colorscale="Blues", opacity=0.4, showscale=False, name="Earth")
-    )
-    fig3d.add_trace(
-        go.Scatter3d(
-            x=r_show[:, 0],
-            y=r_show[:, 1],
-            z=r_show[:, 2],
-            mode="lines",
-            line=dict(color="orange", width=4),
-            name="Orbit (1 revolution)",
-        )
-    )
-    if r_sun is not None and len(r_sun) > 0:
-        sun_dir = np.asarray(r_sun[0])
-        sun_dir = sun_dir / np.linalg.norm(sun_dir) * 2.5 * R_EARTH_KM
-        fig3d.add_trace(
-            go.Scatter3d(
-                x=[0, sun_dir[0]],
-                y=[0, sun_dir[1]],
-                z=[0, sun_dir[2]],
-                mode="lines+markers",
-                line=dict(color="yellow", width=6),
-                marker=dict(size=[2, 6], color="yellow"),
-                name="Sun direction (not to scale)",
-            )
-        )
-    fig3d.update_layout(
-        scene=dict(aspectmode="data"),
-        height=550,
-        margin=dict(l=0, r=0, t=30, b=0),
-        legend=dict(orientation="h"),
-    )
-    st.plotly_chart(fig3d, width='stretch')
-
-    # Ground track (approximate: subtract Earth's rotation using GMST).
-    from energy_balance.orbit import gmst_rad
-
-    cfg: SimulationConfig = df.attrs["config"]
-    epoch = cfg.mission.epoch
-    gmst0 = gmst_rad(epoch)
-    omega_earth = 2 * np.pi / 86164.0905
-    theta_g = gmst0 + omega_earth * df["time_s"].values
-    cos_g, sin_g = np.cos(theta_g), np.sin(theta_g)
-    r_ecef_x = cos_g * r_eci[:, 0] + sin_g * r_eci[:, 1]
-    r_ecef_y = -sin_g * r_eci[:, 0] + cos_g * r_eci[:, 1]
-    r_ecef_z = r_eci[:, 2]
-    lon = np.degrees(np.arctan2(r_ecef_y, r_ecef_x))
-    lat = np.degrees(np.arcsin(r_ecef_z / np.linalg.norm(r_eci, axis=1)))
-    gt = pd.DataFrame({"lon": lon, "lat": lat, "time_s": df["time_s"]})
-    gt = gt[gt["time_s"] <= period_s * 3]  # show up to 3 revolutions
-    fig_gt = px.scatter_geo(gt, lon="lon", lat="lat", title="Ground track (first ~3 orbits)")
-    fig_gt.update_traces(marker=dict(size=3))
-    fig_gt.update_layout(height=400, geo=dict(showcoastlines=True, projection_type="natural earth"))
-    st.plotly_chart(fig_gt, width='stretch')
-
-
 def _render_seasonal(cfg: SimulationConfig) -> None:
     st.caption(
         "Beta angle and eclipse fraction over one year, computed from the orbit's "
@@ -2120,7 +2042,7 @@ def main() -> None:
     # Attach config for metrics (lost through JSON cache attrs).
     df.attrs["config"] = cfg
 
-    tabs = st.tabs(["Summary", "Power", "Battery", "Orbit", "Frames", "Seasonal"])
+    tabs = st.tabs(["Summary", "Power", "Battery", "Frames", "Seasonal"])
     with tabs[0]:
         _render_summary(df)
     with tabs[1]:
@@ -2128,10 +2050,8 @@ def main() -> None:
     with tabs[2]:
         _render_battery(df)
     with tabs[3]:
-        _render_orbit(df)
-    with tabs[4]:
         _render_frames(df)
-    with tabs[5]:
+    with tabs[4]:
         _render_seasonal(cfg)
 
     st.sidebar.download_button(

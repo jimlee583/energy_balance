@@ -332,8 +332,8 @@ def build_document() -> Document:
     _add_heading(doc, "5. What the app shows", 1)
     _add_para(
         doc,
-        "The UI has five tabs. The sidebar also has a 'Download results (CSV)' button that "
-        "exports the entire time-series.",
+        "The UI has five tabs: Summary, Power, Battery, Frames, and Seasonal. The sidebar also "
+        "has a 'Download results (CSV)' button that exports the entire time-series.",
     )
 
     _add_heading(doc, "5.1 Summary", 2)
@@ -367,12 +367,12 @@ def build_document() -> Document:
         ],
     )
 
-    _add_heading(doc, "5.4 Orbit", 2)
+    _add_heading(doc, "5.4 Frames", 2)
     _add_bullets(
         doc,
         [
-            "A 3D view of one revolution around the Earth with the Sun direction marked.",
-            "A ground track for the first few orbits (computed with Greenwich mean sidereal time to approximate ECI -> ECEF).",
+            "An animated Earth-centered view of one orbit, shown nearly edge-on so the Sun sits above or below the orbit according to beta angle, plus a satellite close-up of body axes, panel normals, and the Sun direction.",
+            "Gimbal-angle charts that plot the legal Sun-tracking target against the actual angle and mark rewind intervals for twist-capped 1-axis arrays.",
         ],
     )
 

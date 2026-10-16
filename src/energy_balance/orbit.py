@@ -21,11 +21,10 @@ from .config import OrbitConfig, OrbitSpec
 MU_EARTH_KM3_S2 = 398_600.4418
 R_EARTH_KM = 6378.137
 J2 = 1.08262668e-3
-EARTH_SIDEREAL_DAY_S = 86_164.0905
 EARTH_ORBITAL_RATE_RAD_S = 2.0 * np.pi / (365.2421897 * 86_400.0)
 
 
-# --- Julian date and sidereal time -----------------------------------------------------
+# --- Julian date -----------------------------------------------------------------------
 
 
 def julian_date(dt: datetime) -> float:
@@ -44,20 +43,6 @@ def julian_date(dt: datetime) -> float:
     b = 2 - a + a // 4
     jd0 = int(365.25 * (year + 4716)) + int(30.6001 * (month + 1)) + day + b - 1524.5
     return jd0 + hour / 24.0
-
-
-def gmst_rad(dt: datetime) -> float:
-    """Greenwich mean sidereal time (radians)."""
-    jd = julian_date(dt)
-    t = (jd - 2_451_545.0) / 36_525.0
-    gmst_sec = (
-        67310.54841
-        + (876_600.0 * 3600.0 + 8_640_184.812866) * t
-        + 0.093104 * t * t
-        - 6.2e-6 * t * t * t
-    )
-    gmst_deg = (gmst_sec % 86400.0) / 240.0  # 86400 s / 360 deg = 240
-    return np.deg2rad(gmst_deg % 360.0)
 
 
 # --- Resolve orbit elements ------------------------------------------------------------

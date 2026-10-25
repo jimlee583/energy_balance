@@ -151,6 +151,7 @@ def test_solar_array_summary_marks_twist_capped_arrays():
         panels=[
             PanelConfig(
                 area_m2=2.5,
+                mounting=PanelMounting.ONE_AXIS,
                 gimbal_min_deg=-270.0,
                 gimbal_max_deg=270.0,
             )

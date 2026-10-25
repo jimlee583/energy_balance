@@ -137,6 +137,7 @@ def test_simulation_exposes_twist_cap_trajectory_diagnostics():
             panels=[
                 PanelConfig(
                     name="capped",
+                    mounting=PanelMounting.ONE_AXIS,
                     gimbal_min_deg=-180.0,
                     gimbal_max_deg=180.0,
                     max_slew_rate_deg_s=0.5,

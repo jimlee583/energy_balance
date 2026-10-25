@@ -175,11 +175,19 @@ def test_twist_limited_panel_rewinds_at_rate_and_loses_incidence():
 )
 def test_invalid_twist_limits_are_rejected(minimum, maximum):
     with pytest.raises(ValidationError):
-        PanelConfig(gimbal_min_deg=minimum, gimbal_max_deg=maximum)
+        PanelConfig(
+            mounting=PanelMounting.ONE_AXIS,
+            gimbal_min_deg=minimum,
+            gimbal_max_deg=maximum,
+        )
 
 
 def test_twist_limited_panel_requires_sample_times():
-    panel = PanelConfig(gimbal_min_deg=-180.0, gimbal_max_deg=180.0)
+    panel = PanelConfig(
+        mounting=PanelMounting.ONE_AXIS,
+        gimbal_min_deg=-180.0,
+        gimbal_max_deg=180.0,
+    )
 
     with pytest.raises(ValueError, match="times_s is required"):
         panel_frames_eci(panel, _identity_rotations(1), np.array([[0.0, 0.0, 1.0]]))

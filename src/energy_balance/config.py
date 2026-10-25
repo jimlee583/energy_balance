@@ -99,11 +99,11 @@ class AttitudeConfig(BaseModel):
 class PanelConfig(BaseModel):
     name: str = "Panel"
     area_m2: float = Field(4.0, gt=0.0)
-    # Rest normal is +Z so it stays perpendicular to the default +Y drive axis.
+    # Rest normal is +Z so it stays perpendicular to the default ±X wing axis.
     normal_face: Literal["+X", "-X", "+Y", "-Y", "+Z", "-Z", "custom"] = "+Z"
     normal_body: tuple[float, float, float] = (0.0, 0.0, 1.0)
-    mounting: PanelMounting = PanelMounting.ONE_AXIS
-    rotation_axis_body: tuple[float, float, float] = (0.0, 1.0, 0.0)
+    mounting: PanelMounting = PanelMounting.TWO_AXIS
+    rotation_axis_body: tuple[float, float, float] = (1.0, 0.0, 0.0)
     gimbal_min_deg: float | None = None
     gimbal_max_deg: float | None = None
     max_slew_rate_deg_s: float = Field(1.0, gt=0.0)
@@ -132,13 +132,13 @@ class PanelConfig(BaseModel):
 
 
 class SolarArrayConfig(BaseModel):
-    """One or two solar arrays; two is the default, on the +Y and -Y sides."""
+    """One or two solar arrays; two is the default, on the +X and -X sides."""
 
     panels: list[PanelConfig] = Field(
         default_factory=lambda: [
-            # Wings on the ±Y booms, both driven about +Y, rest face toward +Z.
-            PanelConfig(name="Starboard (+Y)"),
-            PanelConfig(name="Port (-Y)"),
+            # Wings on the ±X booms, both tracking on two axes.
+            PanelConfig(name="Wing (+X)"),
+            PanelConfig(name="Wing (-X)"),
         ],
         min_length=1,
         max_length=2,
@@ -252,8 +252,18 @@ def _iss_like() -> SimulationConfig:
         ),
         solar_array=SolarArrayConfig(
             panels=[
-                PanelConfig(name="Starboard (+Y)", area_m2=2.0),
-                PanelConfig(name="Port (-Y)", area_m2=2.0),
+                PanelConfig(
+                    name="Starboard (+Y)",
+                    area_m2=2.0,
+                    mounting=PanelMounting.ONE_AXIS,
+                    rotation_axis_body=(0.0, 1.0, 0.0),
+                ),
+                PanelConfig(
+                    name="Port (-Y)",
+                    area_m2=2.0,
+                    mounting=PanelMounting.ONE_AXIS,
+                    rotation_axis_body=(0.0, 1.0, 0.0),
+                ),
             ]
         ),
         loads=[

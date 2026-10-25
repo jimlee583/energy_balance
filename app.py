@@ -1606,7 +1606,10 @@ def _render_frames(df: pd.DataFrame) -> None:
     h_display_ref = np.mean(h_hat_eci_k, axis=0)
     h_display_ref /= max(float(np.linalg.norm(h_display_ref)), 1e-12)
     display_rot = _orbit_display_rotation(h_display_ref, u_sun_k[K // 2])
-    r_display_k = (display_rot @ r_k.T).T
+    # Compress the orbit in the overview so the spacecraft is easier to see.
+    # This is a display-only scale; all simulation geometry remains in ECI km.
+    orbit_display_scale = 0.72
+    r_display_k = orbit_display_scale * (display_rot @ r_k.T).T
 
     # Panel geometry comes from the full simulation so twist-limited gimbals
     # retain their state across orbit and animation slices.
@@ -1631,11 +1634,11 @@ def _render_frames(df: pd.DataFrame) -> None:
     r_mag_all = np.linalg.norm(r_all, axis=-1)
     orbit_radius = float(np.max(r_mag_all))
     orbit_min = float(np.min(r_mag_all))
-    sat_scale_s1 = max(0.04 * orbit_radius, 250.0)
+    sat_scale_s1 = max(0.055 * orbit_radius, 325.0)
     arrow_len_s1 = 0.35 * orbit_radius
     sun_distance_s1 = 1.45 * orbit_radius
     sun_arrow_len_s1 = 0.18 * orbit_radius
-    earth_visual_km = min(float(R_EARTH_KM), 0.40 * orbit_min)
+    earth_visual_km = min(float(R_EARTH_KM), 0.25 * orbit_min)
 
     sat_scale_s2 = 1.0
     arrow_len_s2 = 3.0
@@ -1658,7 +1661,7 @@ def _render_frames(df: pd.DataFrame) -> None:
     ]
     r_orbit_full = r_all[orbit_numbers == orbit_sel]
     if len(r_orbit_full) > 1:
-        r_orbit_display = (display_rot @ r_orbit_full.T).T
+        r_orbit_display = orbit_display_scale * (display_rot @ r_orbit_full.T).T
         static_s1.append(
             go.Scatter3d(
                 x=r_orbit_display[:, 0],
@@ -1798,6 +1801,7 @@ def _render_frames(df: pd.DataFrame) -> None:
     fig = make_subplots(
         rows=1, cols=2,
         specs=[[{"type": "scene"}, {"type": "scene"}]],
+        column_widths=[0.36, 0.64],
         subplot_titles=[
             "Earth-centered inertial",
             f"Satellite close-up ({close_up_mode.lower()})",
@@ -1838,11 +1842,15 @@ def _render_frames(df: pd.DataFrame) -> None:
 
     fig.update_layout(
         title=_figure_title(0),
-        height=720,
+        height=860,
+        # Keep user camera changes through Plotly's animated redraws. Without a
+        # stable uirevision, pressing Play restores the original zoom.
+        uirevision="frames-camera",
         margin=dict(l=0, r=0, t=28, b=10),
         legend=dict(orientation="h", y=-0.04),
         scene=dict(
             aspectmode="cube", bgcolor="rgba(0,0,0,0)",
+            uirevision="frames-camera",
             domain=dict(y=[0.0, scene_top]),
             camera=dict(
                 eye=dict(x=0.0, y=-2.4, z=0.35),
@@ -1853,8 +1861,12 @@ def _render_frames(df: pd.DataFrame) -> None:
         ),
         scene2=dict(
             aspectmode="cube", bgcolor="rgba(0,0,0,0)",
+            uirevision="frames-camera",
             domain=dict(y=[0.0, scene_top]),
-            camera=dict(eye=dict(x=2.0, y=2.0, z=1.5), center=dict(x=0, y=0, z=0)),
+            camera=dict(
+                eye=dict(x=1.45, y=1.45, z=1.05),
+                center=dict(x=0, y=0, z=0),
+            ),
             xaxis=blank_axis_s2, yaxis=blank_axis_s2, zaxis=blank_axis_s2,
         ),
         updatemenus=[dict(

@@ -1582,8 +1582,8 @@ def _shade_eclipse(fig: go.Figure, x_values: np.ndarray, in_eclipse: np.ndarray)
 def _render_frames(df: pd.DataFrame) -> None:
     cfg: SimulationConfig = df.attrs["config"]
     st.caption(
-        "Earth-centered orbit view (left) and a satellite close-up (right), animated across the "
-        "chosen orbit. The left view is oriented with the orbit nearly edge-on and horizontal, "
+        "Earth-centered orbit view (top) and a satellite close-up (bottom), animated across the "
+        "chosen orbit. The top view is oriented with the orbit nearly edge-on and horizontal, "
         "so the Sun appears above or below the orbit according to beta angle. "
         "Each configured panel is drawn with its tracked normal: fixed panels sit "
         "flush on their bus face, 1-axis arrays rotate about their gimbal axis to maximise sun "
@@ -1856,27 +1856,28 @@ def _render_frames(df: pd.DataFrame) -> None:
         )
 
     # ------------------------------------------------------------------
-    # Compose the two-scene figure with Play/Pause and a time slider
+    # Compose the two-scene figure with Play/Pause and a time slider.
+    # Stacked (not side-by-side) so each scene gets the full page width.
     # ------------------------------------------------------------------
     fig = make_subplots(
-        rows=1, cols=2,
-        specs=[[{"type": "scene"}, {"type": "scene"}]],
-        column_widths=[0.36, 0.64],
+        rows=2, cols=1,
+        specs=[[{"type": "scene"}], [{"type": "scene"}]],
         subplot_titles=[
             "Earth-centered inertial",
             f"Satellite close-up ({close_up_mode.lower()})",
         ],
-        horizontal_spacing=0.02,
     )
     for tr in initial_data:
         fig.add_trace(tr)
     fig.frames = tuple(frames)
 
-    # Reserve a header inside the figure: title, then Play/Pause, then the
-    # subplot labels. The buttons used to share the title line and covered it.
-    scene_top = 0.82
-    for ann in fig.layout.annotations:
-        ann.update(y=scene_top, yanchor="bottom")
+    # Reserve a header at the top of the figure (title, then Play/Pause),
+    # then split the remaining height between the two stacked scenes, each
+    # with its own subplot-label strip just above it.
+    scene1_top, scene1_bottom = 0.90, 0.50
+    scene2_top, scene2_bottom = 0.46, 0.0
+    fig.layout.annotations[0].update(y=scene1_top, yanchor="bottom")
+    fig.layout.annotations[1].update(y=scene2_top, yanchor="bottom")
 
     axis_half_s1 = sun_distance_s1 * 1.15
     blank_axis_s1 = dict(
@@ -1902,16 +1903,16 @@ def _render_frames(df: pd.DataFrame) -> None:
 
     fig.update_layout(
         title=_figure_title(0),
-        height=860,
+        height=1500,
         # Keep user camera changes through Plotly's animated redraws. Without a
         # stable uirevision, pressing Play restores the original zoom.
         uirevision="frames-camera",
         margin=dict(l=0, r=0, t=28, b=10),
-        legend=dict(orientation="h", y=-0.04),
+        legend=dict(orientation="h", y=-0.02),
         scene=dict(
             aspectmode="cube", bgcolor="rgba(0,0,0,0)",
             uirevision="frames-camera",
-            domain=dict(y=[0.0, scene_top]),
+            domain=dict(x=[0.0, 1.0], y=[scene1_bottom, scene1_top]),
             camera=dict(
                 eye=dict(x=0.0, y=-2.4, z=0.35),
                 up=dict(x=0, y=0, z=1),
@@ -1922,7 +1923,7 @@ def _render_frames(df: pd.DataFrame) -> None:
         scene2=dict(
             aspectmode="cube", bgcolor="rgba(0,0,0,0)",
             uirevision="frames-camera",
-            domain=dict(y=[0.0, scene_top]),
+            domain=dict(x=[0.0, 1.0], y=[scene2_bottom, scene2_top]),
             camera=dict(
                 eye=dict(x=1.45, y=1.45, z=1.05),
                 center=dict(x=0, y=0, z=0),
@@ -1934,7 +1935,7 @@ def _render_frames(df: pd.DataFrame) -> None:
             direction="right",
             showactive=False,
             x=0.0,
-            y=0.948,
+            y=0.965,
             xanchor="left",
             yanchor="top",
             pad=dict(t=0, b=0, l=0, r=8),

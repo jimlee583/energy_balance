@@ -62,7 +62,7 @@ def _init_session() -> None:
 _PANEL_WIDGET_PREFIXES = (
     "pname", "parea", "pface", "pnx", "pny", "pnz", "pmount",
     "pax", "pay", "paz", "peff", "ppack", "pinh", "pdeg", "pyear", "ptemp",
-    "ptwist", "pgmin", "pgmax", "pslew", "p_pair_axis",
+    "ptwist", "pgmin", "pgmax", "pg2min", "pg2max", "pslew", "p_pair_axis",
 )
 
 
@@ -241,9 +241,12 @@ def _solar_array_summary(array: SolarArrayConfig) -> str:
         else ""
     )
     total_area_m2 = sum(panel.area_m2 for panel in array.panels)
-    limited = any(panel.gimbal_min_deg is not None for panel in array.panels)
-    twist_label = ", twist-capped" if limited else ""
-    return f"{panel_count} {panel_label}{side_axis}, {total_area_m2:,.1f} m²{twist_label}"
+    limited = any(
+        panel.gimbal_min_deg is not None or panel.gimbal2_min_deg is not None
+        for panel in array.panels
+    )
+    limit_label = ", gimbal-limited" if limited else ""
+    return f"{panel_count} {panel_label}{side_axis}, {total_area_m2:,.1f} m²{limit_label}"
 
 
 def _symmetric_wing_panels(shared: PanelConfig, side_axis: str) -> list[PanelConfig]:
@@ -333,7 +336,7 @@ def _panels_inputs(cfg: SimulationConfig) -> SolarArrayConfig:
             )
             if n_panels == 2:
                 rotation_axis = _WING_SIDE_AXES[side_axis]
-            elif mounting is PanelMounting.ONE_AXIS:
+            elif mounting in (PanelMounting.ONE_AXIS, PanelMounting.TWO_AXIS):
                 cols = st.columns(3)
                 ax = cols[0].number_input("ax##p0", -1.0, 1.0, float(default.rotation_axis_body[0]), 0.05, key="pax0")
                 ay = cols[1].number_input("ay##p0", -1.0, 1.0, float(default.rotation_axis_body[1]), 0.05, key="pay0")
@@ -344,15 +347,20 @@ def _panels_inputs(cfg: SimulationConfig) -> SolarArrayConfig:
             twist_enabled = False
             gimbal_min_deg = None
             gimbal_max_deg = None
+            gimbal2_min_deg = None
+            gimbal2_max_deg = None
             max_slew_rate_deg_s = default.max_slew_rate_deg_s
-            if mounting is PanelMounting.ONE_AXIS:
+            if mounting in (PanelMounting.ONE_AXIS, PanelMounting.TWO_AXIS):
+                axis_label = "primary axis" if mounting is PanelMounting.TWO_AXIS else "gimbal"
                 twist_enabled = st.checkbox(
-                    "Twist-cap gimbal",
+                    f"Limit {axis_label} travel",
                     value=default.gimbal_min_deg is not None,
                     key="ptwist0",
                     help=(
-                        "Limit accumulated gimbal travel. At a limit, the array unwinds "
-                        "toward a 360°-equivalent Sun-tracking angle."
+                        "Limit accumulated gimbal travel. A span of 360° or more unwinds "
+                        "toward a 360°-equivalent Sun-tracking angle (cable-wrap); a "
+                        "narrower span is a hard mechanical stop where incidence degrades "
+                        "once the Sun is out of reach."
                     ),
                 )
                 if twist_enabled:
@@ -385,10 +393,10 @@ def _panels_inputs(cfg: SimulationConfig) -> SolarArrayConfig:
                         format="%.3f",
                         key="pslew0",
                     )
-                    if entered_min > 0.0 or entered_max < 0.0 or entered_max - entered_min < 360.0:
+                    if entered_min > 0.0 or entered_max < 0.0 or entered_max <= entered_min:
                         st.error(
-                            "Twist limits must contain 0° and span at least 360°. "
-                            "The last valid limits remain active."
+                            "Gimbal limits must contain 0° and the maximum must exceed the "
+                            "minimum. The last valid limits remain active."
                         )
                         gimbal_min_deg = (
                             default.gimbal_min_deg
@@ -403,6 +411,52 @@ def _panels_inputs(cfg: SimulationConfig) -> SolarArrayConfig:
                     else:
                         gimbal_min_deg = entered_min
                         gimbal_max_deg = entered_max
+                        if gimbal_max_deg - gimbal_min_deg >= 360.0:
+                            st.caption("≥360°: cable-wrap, always tracks the Sun exactly.")
+                        else:
+                            st.caption(
+                                "<360°: hard mechanical stop, incidence degrades once the "
+                                "Sun is out of reach."
+                            )
+            if mounting is PanelMounting.TWO_AXIS:
+                twist2_enabled = st.checkbox(
+                    "Limit secondary axis travel",
+                    value=default.gimbal2_min_deg is not None,
+                    key="ptwist2_0",
+                    help=(
+                        "Hard mechanical stop on the second gimbal axis, bounded to "
+                        "±90°. The Sun can go out of reach, in which case incidence "
+                        "degrades smoothly."
+                    ),
+                )
+                if twist2_enabled:
+                    cols = st.columns(2)
+                    entered_min2 = cols[0].number_input(
+                        "Secondary minimum angle (deg)",
+                        min_value=-90.0,
+                        max_value=0.0,
+                        value=float(
+                            default.gimbal2_min_deg
+                            if default.gimbal2_min_deg is not None
+                            else -70.0
+                        ),
+                        step=5.0,
+                        key="pg2min0",
+                    )
+                    entered_max2 = cols[1].number_input(
+                        "Secondary maximum angle (deg)",
+                        min_value=0.0,
+                        max_value=90.0,
+                        value=float(
+                            default.gimbal2_max_deg
+                            if default.gimbal2_max_deg is not None
+                            else 70.0
+                        ),
+                        step=5.0,
+                        key="pg2max0",
+                    )
+                    gimbal2_min_deg = entered_min2
+                    gimbal2_max_deg = entered_max2
             eff = st.number_input(
                 "Cell efficiency##p0",
                 0.05,
@@ -460,6 +514,8 @@ def _panels_inputs(cfg: SimulationConfig) -> SolarArrayConfig:
                 rotation_axis_body=rotation_axis,
                 gimbal_min_deg=gimbal_min_deg,
                 gimbal_max_deg=gimbal_max_deg,
+                gimbal2_min_deg=gimbal2_min_deg,
+                gimbal2_max_deg=gimbal2_max_deg,
                 max_slew_rate_deg_s=max_slew_rate_deg_s,
                 cell_efficiency=eff,
                 packing_factor=pack,
@@ -1618,6 +1674,10 @@ def _render_frames(df: pd.DataFrame) -> None:
     cos_k = np.asarray(df.attrs["panel_cos_incidence"])[:, frame_indices]
     angle_k = np.asarray(df.attrs["panel_angle_deg"])[:, frame_indices]
     target_angle_k = np.asarray(df.attrs["panel_target_angle_deg"])[:, frame_indices]
+    angle1_k = np.asarray(df.attrs["panel_angle1_deg"])[:, frame_indices]
+    angle2_k = np.asarray(df.attrs["panel_angle2_deg"])[:, frame_indices]
+    target_angle1_k = np.asarray(df.attrs["panel_target_angle1_deg"])[:, frame_indices]
+    target_angle2_k = np.asarray(df.attrs["panel_target_angle2_deg"])[:, frame_indices]
     rewinding_k = np.asarray(df.attrs["panel_rewinding"])[:, frame_indices]
     normal_body_k = np.einsum("nji,pnj->pni", rot_k, normal_eci_k)
     edge_body_k = np.einsum("nji,pnj->pni", rot_k, edge_eci_k)
@@ -1939,27 +1999,77 @@ def _render_frames(df: pd.DataFrame) -> None:
             labels={"value": "Actual angle (deg)", "variable": "Panel"},
         )
         for i, panel in enumerate(cfg.solar_array.panels):
-            if panel.mounting is not PanelMounting.ONE_AXIS or panel.gimbal_min_deg is None:
-                continue
-            fig_g.add_trace(
-                go.Scatter(
-                    x=minutes_k,
-                    y=target_angle_k[i],
-                    name=f"{panel.name} target",
-                    mode="lines",
-                    line=dict(dash="dot"),
+            if panel.mounting is PanelMounting.ONE_AXIS:
+                if panel.gimbal_min_deg is None:
+                    continue
+                fig_g.add_trace(
+                    go.Scatter(
+                        x=minutes_k,
+                        y=target_angle_k[i],
+                        name=f"{panel.name} target",
+                        mode="lines",
+                        line=dict(dash="dot"),
+                    )
                 )
-            )
-            fig_g.add_hline(
-                y=panel.gimbal_min_deg,
-                line=dict(color="firebrick", dash="dash"),
-                annotation_text=f"{panel.name} min",
-            )
-            fig_g.add_hline(
-                y=panel.gimbal_max_deg,
-                line=dict(color="firebrick", dash="dash"),
-                annotation_text=f"{panel.name} max",
-            )
+                fig_g.add_hline(
+                    y=panel.gimbal_min_deg,
+                    line=dict(color="firebrick", dash="dash"),
+                    annotation_text=f"{panel.name} min",
+                )
+                fig_g.add_hline(
+                    y=panel.gimbal_max_deg,
+                    line=dict(color="firebrick", dash="dash"),
+                    annotation_text=f"{panel.name} max",
+                )
+            elif panel.mounting is PanelMounting.TWO_AXIS:
+                if panel.gimbal_min_deg is not None:
+                    fig_g.add_trace(
+                        go.Scatter(
+                            x=minutes_k, y=angle1_k[i],
+                            name=f"{panel.name} axis1", mode="lines",
+                        )
+                    )
+                    fig_g.add_trace(
+                        go.Scatter(
+                            x=minutes_k, y=target_angle1_k[i],
+                            name=f"{panel.name} axis1 target", mode="lines",
+                            line=dict(dash="dot"),
+                        )
+                    )
+                    fig_g.add_hline(
+                        y=panel.gimbal_min_deg,
+                        line=dict(color="firebrick", dash="dash"),
+                        annotation_text=f"{panel.name} axis1 min",
+                    )
+                    fig_g.add_hline(
+                        y=panel.gimbal_max_deg,
+                        line=dict(color="firebrick", dash="dash"),
+                        annotation_text=f"{panel.name} axis1 max",
+                    )
+                if panel.gimbal2_min_deg is not None:
+                    fig_g.add_trace(
+                        go.Scatter(
+                            x=minutes_k, y=angle2_k[i],
+                            name=f"{panel.name} axis2", mode="lines",
+                        )
+                    )
+                    fig_g.add_trace(
+                        go.Scatter(
+                            x=minutes_k, y=target_angle2_k[i],
+                            name=f"{panel.name} axis2 target", mode="lines",
+                            line=dict(dash="dot"),
+                        )
+                    )
+                    fig_g.add_hline(
+                        y=panel.gimbal2_min_deg,
+                        line=dict(color="darkorange", dash="dash"),
+                        annotation_text=f"{panel.name} axis2 min",
+                    )
+                    fig_g.add_hline(
+                        y=panel.gimbal2_max_deg,
+                        line=dict(color="darkorange", dash="dash"),
+                        annotation_text=f"{panel.name} axis2 max",
+                    )
         rewinding_any = np.any(rewinding_k, axis=0)
         if np.any(rewinding_any):
             starts = np.flatnonzero(rewinding_any & ~np.r_[False, rewinding_any[:-1]])
@@ -2028,7 +2138,20 @@ def _render_frames(df: pd.DataFrame) -> None:
                 f"target {float(target_angle_k[i_p, insp]):+.1f} deg{rewind_label}"
             )
         else:
-            desc = f"2-axis -> Sun, slew {float(angle_k[i_p, insp]):.1f} deg"
+            a1_act = float(angle1_k[i_p, insp])
+            a1_tgt = float(target_angle1_k[i_p, insp])
+            a2_act = float(angle2_k[i_p, insp])
+            a2_tgt = float(target_angle2_k[i_p, insp])
+            limited_label = (
+                ", LIMIT REACHED"
+                if abs(a1_act - a1_tgt) > 1e-6 or abs(a2_act - a2_tgt) > 1e-6
+                else ""
+            )
+            desc = (
+                f"2-axis -> Sun, slew {float(angle_k[i_p, insp]):.1f} deg, "
+                f"axis1 {a1_act:+.1f} deg (target {a1_tgt:+.1f}), "
+                f"axis2 {a2_act:+.1f} deg (target {a2_tgt:+.1f}){limited_label}"
+            )
         rows.append(_vec_row(f"{panel.name} normal", n_eci, desc))
 
     st.dataframe(pd.DataFrame(rows), width='stretch', hide_index=True)

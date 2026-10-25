@@ -114,6 +114,24 @@ def test_symmetric_wings_copy_twist_cap_parameters():
     assert [wing.max_slew_rate_deg_s for wing in wings] == [0.75, 0.75]
 
 
+def test_symmetric_wings_copy_secondary_gimbal_limit_parameters():
+    shared = PanelConfig(
+        mounting=PanelMounting.TWO_AXIS,
+        gimbal_min_deg=-80.0,
+        gimbal_max_deg=80.0,
+        gimbal2_min_deg=-70.0,
+        gimbal2_max_deg=70.0,
+        max_slew_rate_deg_s=0.75,
+    )
+
+    wings = _symmetric_wing_panels(shared, "±Y")
+
+    assert [wing.gimbal_min_deg for wing in wings] == [-80.0, -80.0]
+    assert [wing.gimbal_max_deg for wing in wings] == [80.0, 80.0]
+    assert [wing.gimbal2_min_deg for wing in wings] == [-70.0, -70.0]
+    assert [wing.gimbal2_max_deg for wing in wings] == [70.0, 70.0]
+
+
 @pytest.mark.parametrize(
     ("axis", "expected"),
     [
@@ -146,7 +164,7 @@ def test_solar_array_summary_describes_single_panel():
     assert _solar_array_summary(array) == "1 panel, 2.5 m²"
 
 
-def test_solar_array_summary_marks_twist_capped_arrays():
+def test_solar_array_summary_marks_gimbal_limited_arrays():
     array = SolarArrayConfig(
         panels=[
             PanelConfig(
@@ -158,4 +176,19 @@ def test_solar_array_summary_marks_twist_capped_arrays():
         ]
     )
 
-    assert _solar_array_summary(array) == "1 panel, 2.5 m², twist-capped"
+    assert _solar_array_summary(array) == "1 panel, 2.5 m², gimbal-limited"
+
+
+def test_solar_array_summary_marks_secondary_axis_limited_arrays():
+    array = SolarArrayConfig(
+        panels=[
+            PanelConfig(
+                area_m2=2.5,
+                mounting=PanelMounting.TWO_AXIS,
+                gimbal2_min_deg=-70.0,
+                gimbal2_max_deg=70.0,
+            )
+        ]
+    )
+
+    assert _solar_array_summary(array) == "1 panel, 2.5 m², gimbal-limited"

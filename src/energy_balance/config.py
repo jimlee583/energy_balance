@@ -106,6 +106,8 @@ class PanelConfig(BaseModel):
     rotation_axis_body: tuple[float, float, float] = (1.0, 0.0, 0.0)
     gimbal_min_deg: float | None = None
     gimbal_max_deg: float | None = None
+    gimbal2_min_deg: float | None = None
+    gimbal2_max_deg: float | None = None
     max_slew_rate_deg_s: float = Field(1.0, gt=0.0)
     cell_efficiency: float = Field(0.30, gt=0.0, le=1.0)
     packing_factor: float = Field(0.85, gt=0.0, le=1.0)
@@ -118,16 +120,38 @@ class PanelConfig(BaseModel):
     def _apply_face(self) -> PanelConfig:
         if self.normal_face != "custom":
             object.__setattr__(self, "normal_body", BODY_FACES[self.normal_face])
+
+        # Primary-axis gimbal limit: legal for 1-axis and 2-axis panels. A span
+        # >= 360 deg means the gimbal can always rewind to a 360-deg-equivalent
+        # angle and keep tracking the Sun exactly (cable-wrap mode); a span
+        # < 360 deg is a hard mechanical stop where the Sun can go out of reach
+        # and incidence degrades.
         limits = (self.gimbal_min_deg, self.gimbal_max_deg)
         if (limits[0] is None) != (limits[1] is None):
             raise ValueError("gimbal minimum and maximum must be supplied together")
         if limits[0] is not None and limits[1] is not None:
-            if self.mounting is not PanelMounting.ONE_AXIS:
-                raise ValueError("gimbal twist limits are only supported for 1-axis panels")
+            if self.mounting not in (PanelMounting.ONE_AXIS, PanelMounting.TWO_AXIS):
+                raise ValueError("gimbal limits are only supported for 1-axis and 2-axis panels")
             if not limits[0] <= 0.0 <= limits[1]:
                 raise ValueError("gimbal limits must contain the 0 deg rest position")
-            if limits[1] - limits[0] < 360.0:
-                raise ValueError("gimbal limits must span at least 360 deg")
+            if limits[1] <= limits[0]:
+                raise ValueError("gimbal maximum must exceed gimbal minimum")
+
+        # Secondary-axis gimbal limit: only meaningful for 2-axis panels. The
+        # secondary angle is bounded to +/-90 deg by the tracking geometry
+        # (it is always a hard stop; a cable-wrap rewind mode is impossible).
+        limits2 = (self.gimbal2_min_deg, self.gimbal2_max_deg)
+        if (limits2[0] is None) != (limits2[1] is None):
+            raise ValueError("secondary gimbal minimum and maximum must be supplied together")
+        if limits2[0] is not None and limits2[1] is not None:
+            if self.mounting is not PanelMounting.TWO_AXIS:
+                raise ValueError("secondary gimbal limits are only supported for 2-axis panels")
+            if not (-90.0 <= limits2[0] <= 0.0 <= limits2[1] <= 90.0):
+                raise ValueError(
+                    "secondary gimbal limits must contain 0 deg and lie within +/-90 deg"
+                )
+            if limits2[1] <= limits2[0]:
+                raise ValueError("secondary gimbal maximum must exceed secondary gimbal minimum")
         return self
 
 

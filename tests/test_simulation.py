@@ -72,6 +72,8 @@ def test_legacy_config_defaults_to_8s_battery_dominated_bus():
 
 
 def test_two_axis_tracking_panel_always_full_power_in_sunlight():
+    # Exercises only the unlimited 2-axis case (no gimbal_min/max_deg or
+    # gimbal2_min/max_deg set): the panel always points exactly at the Sun.
     cfg = SimulationConfig(
         name="tracking-check",
         mission=MissionConfig(duration_days=0.1, time_step_s=60.0),
@@ -151,7 +153,56 @@ def test_simulation_exposes_twist_cap_trajectory_diagnostics():
     n_samples = len(df)
     assert df.attrs["panel_angle_deg"].shape == (1, n_samples)
     assert df.attrs["panel_target_angle_deg"].shape == (1, n_samples)
+    assert df.attrs["panel_angle1_deg"].shape == (1, n_samples)
+    assert df.attrs["panel_angle2_deg"].shape == (1, n_samples)
+    assert df.attrs["panel_target_angle1_deg"].shape == (1, n_samples)
+    assert df.attrs["panel_target_angle2_deg"].shape == (1, n_samples)
     assert df.attrs["panel_rewinding"].shape == (1, n_samples)
     assert df.attrs["panel_normal_eci"].shape == (1, n_samples, 3)
     assert np.all(df.attrs["panel_angle_deg"] >= -180.0)
     assert np.all(df.attrs["panel_angle_deg"] <= 180.0)
+
+
+def test_two_axis_tracking_panel_with_limits_degrades_but_does_not_error():
+    cfg = SimulationConfig(
+        mission=MissionConfig(duration_days=0.1, time_step_s=60.0),
+        solar_array=SolarArrayConfig(
+            panels=[
+                PanelConfig(
+                    name="2ax-limited",
+                    area_m2=1.0,
+                    mounting=PanelMounting.TWO_AXIS,
+                    gimbal_min_deg=-70.0,
+                    gimbal_max_deg=70.0,
+                    gimbal2_min_deg=-60.0,
+                    gimbal2_max_deg=60.0,
+                    max_slew_rate_deg_s=2.0,
+                    cell_efficiency=0.3,
+                    packing_factor=1.0,
+                    inherent_degradation=1.0,
+                    degradation_per_year=0.0,
+                    temperature_loss=0.0,
+                )
+            ]
+        ),
+        loads=[LoadConfig(name="bus", power_w=0.0, mode=LoadMode.ALWAYS)],
+        battery=BatteryConfig(capacity_wh=10000.0, max_charge_rate_w=10000.0),
+        power_system=PowerSystemConfig(path_efficiency=1.0),
+    )
+
+    df = run_simulation(cfg)
+
+    sunlit = df[df["illumination"] > 0.99]
+    assert len(sunlit) > 0
+    assert sunlit["gen_w"].min() >= 0.0
+    assert sunlit["gen_w"].max() <= 420.0
+    # Degrades below the always-full-power band at least part of the time.
+    assert sunlit["gen_w"].min() < 400.0
+
+    n_samples = len(df)
+    assert df.attrs["panel_angle1_deg"].shape == (1, n_samples)
+    assert df.attrs["panel_angle2_deg"].shape == (1, n_samples)
+    assert df.attrs["panel_target_angle1_deg"].shape == (1, n_samples)
+    assert df.attrs["panel_target_angle2_deg"].shape == (1, n_samples)
+    assert np.all(np.abs(df.attrs["panel_angle1_deg"]) <= 70.0 + 1e-6)
+    assert np.all(np.abs(df.attrs["panel_angle2_deg"]) <= 60.0 + 1e-6)

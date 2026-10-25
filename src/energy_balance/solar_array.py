@@ -55,29 +55,20 @@ def _in_plane_axis_batch(normals: np.ndarray) -> np.ndarray:
     return proj / np.where(norms < 1e-12, 1.0, norms)
 
 
-def _limited_one_axis_angles(
-    ideal_wrapped_deg: np.ndarray,
+def _rewind_branch_angles(
+    ideal_unwrapped: np.ndarray,
     times_s: np.ndarray,
     minimum_deg: float,
     maximum_deg: float,
     slew_rate_deg_s: float,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Follow an ideal 1-axis command within cable-twist limits.
+    """Follow an ideal unwrapped command within a >=360-deg cable-wrap interval.
 
-    The ideal command is first unwrapped into a continuous trajectory. Its
-    current 360-degree-equivalent branch is retained until that branch leaves
-    the legal travel interval. The controller then selects an equivalent
-    branch inside the interval and rate-limits the actual angle while the
-    gimbal unwinds toward it.
+    The current 360-degree-equivalent branch is retained until that branch
+    leaves the legal travel interval. The controller then selects an
+    equivalent branch inside the interval and rate-limits the actual angle
+    while the gimbal unwinds toward it.
     """
-    ideal_wrapped_deg = np.asarray(ideal_wrapped_deg, dtype=float)
-    times_s = np.asarray(times_s, dtype=float)
-    if ideal_wrapped_deg.shape != times_s.shape:
-        raise ValueError("times_s must have one value per panel-geometry sample")
-    if np.any(np.diff(times_s) <= 0.0):
-        raise ValueError("times_s must be strictly increasing")
-
-    ideal_unwrapped = np.rad2deg(np.unwrap(np.deg2rad(ideal_wrapped_deg)))
     target = np.empty_like(ideal_unwrapped)
     actual = np.empty_like(ideal_unwrapped)
     rewinding = np.zeros(ideal_unwrapped.shape, dtype=bool)
@@ -117,6 +108,66 @@ def _limited_one_axis_angles(
     return actual, target, rewinding
 
 
+def _hard_stop_angles(
+    ideal_unwrapped: np.ndarray,
+    times_s: np.ndarray,
+    minimum_deg: float,
+    maximum_deg: float,
+    slew_rate_deg_s: float,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Follow an ideal unwrapped command within a hard mechanical stop.
+
+    Unlike the cable-wrap case there is no equivalent branch to rewind to:
+    the command is simply clamped into ``[minimum_deg, maximum_deg]`` and the
+    gimbal rate-limits its way toward that clamped target. The Sun can go out
+    of reach, in which case the panel stays pinned at the nearer limit and
+    incidence degrades.
+    """
+    target = np.clip(ideal_unwrapped, minimum_deg, maximum_deg)
+    actual = np.empty_like(target)
+    actual[0] = np.clip(0.0, minimum_deg, maximum_deg)
+    for i in range(1, len(target)):
+        max_step = slew_rate_deg_s * float(times_s[i] - times_s[i - 1])
+        error = target[i] - float(actual[i - 1])
+        actual[i] = np.clip(
+            actual[i - 1] + np.clip(error, -max_step, max_step),
+            minimum_deg,
+            maximum_deg,
+        )
+    rewinding = np.zeros(target.shape, dtype=bool)
+    return actual, target, rewinding
+
+
+def _limited_axis_angles(
+    ideal_wrapped_deg: np.ndarray,
+    times_s: np.ndarray,
+    minimum_deg: float,
+    maximum_deg: float,
+    slew_rate_deg_s: float,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Follow an ideal single-axis command within gimbal limits.
+
+    The ideal command is first unwrapped into a continuous trajectory. If the
+    interval spans >=360 deg the gimbal can always rewind to a
+    360-degree-equivalent angle and keep tracking the Sun exactly (cable-wrap
+    mode, see :func:`_rewind_branch_angles`). Otherwise it is a hard
+    mechanical stop (see :func:`_hard_stop_angles`): no rewind, the command is
+    directly clamped, and incidence degrades once the Sun goes out of reach.
+    """
+    ideal_wrapped_deg = np.asarray(ideal_wrapped_deg, dtype=float)
+    times_s = np.asarray(times_s, dtype=float)
+    if ideal_wrapped_deg.shape != times_s.shape:
+        raise ValueError("times_s must have one value per panel-geometry sample")
+    if np.any(np.diff(times_s) <= 0.0):
+        raise ValueError("times_s must be strictly increasing")
+
+    ideal_unwrapped = np.rad2deg(np.unwrap(np.deg2rad(ideal_wrapped_deg)))
+
+    if maximum_deg - minimum_deg >= 360.0:
+        return _rewind_branch_angles(ideal_unwrapped, times_s, minimum_deg, maximum_deg, slew_rate_deg_s)
+    return _hard_stop_angles(ideal_unwrapped, times_s, minimum_deg, maximum_deg, slew_rate_deg_s)
+
+
 def panel_frames_eci(
     panel: PanelConfig,
     body_to_eci: np.ndarray,  # (N, 3, 3)
@@ -135,17 +186,39 @@ def panel_frames_eci(
           to the axis. This is the same vector the power model implicitly
           picks, so the drawing and the computed ``cos(incidence)`` cannot
           disagree.
-        - TWO_AXIS: ``u_sun_eci`` directly.
+        - TWO_AXIS: ``u_sun_eci`` directly when unlimited; when a gimbal limit
+          is configured, the two physical gimbal angles are solved for and
+          clamped, and the resulting (possibly off-Sun) normal is used
+          instead.
     - ``edge_eci`` (N, 3): a long in-plane axis for drawing a plate.
     - ``angle_deg`` (N,): gimbal/slew angle. For 1-axis it is the signed angle
       about ``rotation_axis_body`` from the rest normal to the actual normal.
       For 2-axis it is the total slew angle between the rest normal and the
-      Sun. For fixed panels it is zero.
-    - ``target_angle_deg`` (N,): ideal legal gimbal command. This differs from
-      ``angle_deg`` while a twist-limited gimbal is slewing.
-    - ``rewinding`` (N,): true while a twist-limited gimbal is unwinding after
-      switching to a 360-degree-equivalent tracking branch.
+      *actual* normal (this can be less than the Sun offset while a limited
+      gimbal is clamped). For fixed panels it is zero.
+    - ``target_angle_deg`` (N,): ideal legal gimbal command (1-axis), or the
+      total slew angle to the Sun (2-axis). This differs from ``angle_deg``
+      while a limited gimbal is slewing or clamped at a stop.
+    - ``angle1_deg`` / ``angle2_deg`` (N,): the actual primary/secondary-axis
+      gimbal angles. For fixed panels both are zero. For 1-axis panels
+      ``angle1_deg`` equals ``angle_deg`` and ``angle2_deg`` is zero (no
+      secondary axis exists). For 2-axis panels these are the two physical
+      gimbal angles computed from the ``(normal_body, a2, rotation_axis_body)``
+      triad.
+    - ``target_angle1_deg`` / ``target_angle2_deg`` (N,): the ideal
+      (unconstrained) primary/secondary-axis commands, mirroring
+      ``angle1_deg``/``angle2_deg``.
+    - ``rewinding`` (N,): true while a gimbal is unwinding after switching to
+      a 360-degree-equivalent cable-wrap tracking branch. Always false for
+      hard-stop limits (which never rewind).
     - ``cos_incidence`` (N,): ``clip(normal_eci . u_sun_eci, 0, 1)``.
+
+    A gimbal limit (``gimbal_min_deg``/``gimbal_max_deg`` for the primary
+    axis, ``gimbal2_min_deg``/``gimbal2_max_deg`` for the 2-axis secondary
+    axis) spanning >=360 deg is a cable-wrap limit: the gimbal always finds a
+    360-degree-equivalent angle and keeps tracking the Sun exactly. A span
+    <360 deg is a hard mechanical stop: the Sun can go out of reach and
+    incidence degrades smoothly, with no rewind.
     """
     body_to_eci = np.asarray(body_to_eci, dtype=float)
     u_sun_eci = np.atleast_2d(np.asarray(u_sun_eci, dtype=float))
@@ -168,6 +241,10 @@ def panel_frames_eci(
         edge_eci = np.einsum("nij,nj->ni", body_to_eci, edge_body)
         angle_deg = np.zeros(n_pts)
         target_angle_deg = angle_deg.copy()
+        angle1_deg = angle_deg.copy()
+        angle2_deg = angle_deg.copy()
+        target_angle1_deg = angle_deg.copy()
+        target_angle2_deg = angle_deg.copy()
         rewinding = np.zeros(n_pts, dtype=bool)
 
     elif panel.mounting is PanelMounting.ONE_AXIS:
@@ -188,8 +265,8 @@ def panel_frames_eci(
 
         if panel.gimbal_min_deg is not None and panel.gimbal_max_deg is not None:
             if times_s is None:
-                raise ValueError("times_s is required for a twist-limited 1-axis panel")
-            angle_deg, target_angle_deg, rewinding = _limited_one_axis_angles(
+                raise ValueError("times_s is required for a gimbal-limited 1-axis panel")
+            angle_deg, target_angle_deg, rewinding = _limited_axis_angles(
                 ideal_angle_deg,
                 np.asarray(times_s, dtype=float),
                 panel.gimbal_min_deg,
@@ -211,8 +288,84 @@ def panel_frames_eci(
             target_angle_deg = angle_deg.copy()
             rewinding = np.zeros(n_pts, dtype=bool)
 
+        angle1_deg = angle_deg
+        angle2_deg = np.zeros(n_pts)
+        target_angle1_deg = target_angle_deg
+        target_angle2_deg = np.zeros(n_pts)
+
     else:  # TWO_AXIS
-        normal_eci = u_sun_eci.copy()
+        # Secondary gimbal axis: perpendicular to both the primary axis and
+        # the rest normal (which is itself perpendicular to the primary axis
+        # by convention), so (normal_body, a2_body, axis_body) is an
+        # orthonormal right-handed triad.
+        a2_body = np.cross(axis_body, normal_body)
+        a2_body = a2_body / np.linalg.norm(a2_body)
+
+        p = u_sun_body @ normal_body
+        q = u_sun_body @ a2_body
+        r = np.clip(u_sun_body @ axis_body, -1.0, 1.0)
+        angle1_ideal_deg = np.rad2deg(np.arctan2(q, p))
+        angle2_ideal_deg = np.rad2deg(-np.arcsin(r))
+
+        has_limit1 = panel.gimbal_min_deg is not None and panel.gimbal_max_deg is not None
+        has_limit2 = panel.gimbal2_min_deg is not None and panel.gimbal2_max_deg is not None
+
+        if not has_limit1 and not has_limit2:
+            # Fast exact path: preserves today's bit-for-bit behavior (always
+            # points exactly at the Sun) when no limit is configured.
+            normal_eci = u_sun_eci.copy()
+            angle1_deg = angle1_ideal_deg
+            angle2_deg = angle2_ideal_deg
+            target_angle1_deg = angle1_ideal_deg.copy()
+            target_angle2_deg = angle2_ideal_deg.copy()
+            rewinding = np.zeros(n_pts, dtype=bool)
+        else:
+            if times_s is None:
+                raise ValueError("times_s is required for a gimbal-limited 2-axis panel")
+            times_s = np.asarray(times_s, dtype=float)
+
+            if has_limit1:
+                angle1_deg, target_angle1_deg, rewinding = _limited_axis_angles(
+                    angle1_ideal_deg,
+                    times_s,
+                    panel.gimbal_min_deg,
+                    panel.gimbal_max_deg,
+                    panel.max_slew_rate_deg_s,
+                )
+            else:
+                angle1_deg = angle1_ideal_deg
+                target_angle1_deg = angle1_ideal_deg.copy()
+                rewinding = np.zeros(n_pts, dtype=bool)
+
+            if has_limit2:
+                # Axis 2 is always a hard stop (its range is physically
+                # bounded to +/-90 deg), never a cable-wrap rewind.
+                angle2_deg, target_angle2_deg, _ = _limited_axis_angles(
+                    angle2_ideal_deg,
+                    times_s,
+                    panel.gimbal2_min_deg,
+                    panel.gimbal2_max_deg,
+                    panel.max_slew_rate_deg_s,
+                )
+            else:
+                angle2_deg = angle2_ideal_deg
+                target_angle2_deg = angle2_ideal_deg.copy()
+
+            # Each axis is clamped independently (not a joint-workspace
+            # solve); recombine via the same sequential-rotation kinematics
+            # used to derive the ideal angles.
+            angle1_rad = np.deg2rad(angle1_deg)
+            angle2_rad = np.deg2rad(angle2_deg)
+            n0_tile = np.tile(normal_body, (n_pts, 1))
+            a2_tile = np.tile(a2_body, (n_pts, 1))
+            a1_tile = np.tile(axis_body, (n_pts, 1))
+            actual_body = (
+                (np.cos(angle2_rad) * np.cos(angle1_rad))[:, None] * n0_tile
+                + (np.cos(angle2_rad) * np.sin(angle1_rad))[:, None] * a2_tile
+                - np.sin(angle2_rad)[:, None] * a1_tile
+            )
+            normal_eci = np.einsum("nij,nj->ni", body_to_eci, actual_body)
+
         # Edge: project boom axis (rotation_axis_body) perpendicular to normal.
         axis_eci = np.einsum("nij,nj->ni", body_to_eci, np.tile(axis_body, (n_pts, 1)))
         axis_dot_n = np.sum(axis_eci * normal_eci, axis=-1, keepdims=True)
@@ -221,11 +374,14 @@ def panel_frames_eci(
         fallback = _in_plane_axis_batch(normal_eci)
         safe_norm = np.where(edge_norm < 1e-9, 1.0, edge_norm)
         edge_eci = np.where(edge_norm < 1e-9, fallback, edge_raw / safe_norm)
-        # 2-axis slew angle: angle between rest normal and the Sun, both in body.
-        cos_slew = np.clip(u_sun_body @ normal_body, -1.0, 1.0)
-        angle_deg = np.rad2deg(np.arccos(cos_slew))
-        target_angle_deg = angle_deg.copy()
-        rewinding = np.zeros(n_pts, dtype=bool)
+
+        # Total slew angle: rest normal to the actual (possibly clamped)
+        # normal, vs. rest normal to the Sun (the ideal/target slew).
+        actual_normal_body = np.einsum("nji,nj->ni", body_to_eci, normal_eci)
+        cos_slew_actual = np.clip(np.sum(actual_normal_body * normal_body, axis=-1), -1.0, 1.0)
+        angle_deg = np.rad2deg(np.arccos(cos_slew_actual))
+        cos_slew_ideal = np.clip(u_sun_body @ normal_body, -1.0, 1.0)
+        target_angle_deg = np.rad2deg(np.arccos(cos_slew_ideal))
 
     cos_inc = np.clip(np.sum(normal_eci * u_sun_eci, axis=-1), 0.0, 1.0)
     return {
@@ -233,18 +389,13 @@ def panel_frames_eci(
         "edge_eci": edge_eci,
         "angle_deg": angle_deg,
         "target_angle_deg": target_angle_deg,
+        "angle1_deg": angle1_deg,
+        "angle2_deg": angle2_deg,
+        "target_angle1_deg": target_angle1_deg,
+        "target_angle2_deg": target_angle2_deg,
         "rewinding": rewinding,
         "cos_incidence": cos_inc,
     }
-
-
-def _cos_incidence_for_panel(
-    panel: PanelConfig,
-    body_to_eci: np.ndarray,  # (N, 3, 3)
-    u_sun_eci: np.ndarray,  # (N, 3)
-) -> np.ndarray:
-    """Return cos(incidence) per time step for a single panel, in 0..1."""
-    return panel_frames_eci(panel, body_to_eci, u_sun_eci)["cos_incidence"]
 
 
 def array_power_watts(
@@ -270,6 +421,10 @@ def array_power_watts(
     cos_incidence = np.zeros((len(array.panels), n_pts))
     angle_deg = np.zeros((len(array.panels), n_pts))
     target_angle_deg = np.zeros((len(array.panels), n_pts))
+    angle1_deg = np.zeros((len(array.panels), n_pts))
+    angle2_deg = np.zeros((len(array.panels), n_pts))
+    target_angle1_deg = np.zeros((len(array.panels), n_pts))
+    target_angle2_deg = np.zeros((len(array.panels), n_pts))
     rewinding = np.zeros((len(array.panels), n_pts), dtype=bool)
     for idx, panel in enumerate(array.panels):
         frames = panel_frames_eci(panel, body_to_eci, u_sun_eci, times_s)
@@ -279,6 +434,10 @@ def array_power_watts(
         cos_incidence[idx] = cos_inc
         angle_deg[idx] = frames["angle_deg"]
         target_angle_deg[idx] = frames["target_angle_deg"]
+        angle1_deg[idx] = frames["angle1_deg"]
+        angle2_deg[idx] = frames["angle2_deg"]
+        target_angle1_deg[idx] = frames["target_angle1_deg"]
+        target_angle2_deg[idx] = frames["target_angle2_deg"]
         rewinding[idx] = frames["rewinding"]
         per_panel[idx] = (
             flux
@@ -298,5 +457,9 @@ def array_power_watts(
         "cos_incidence": cos_incidence,
         "angle_deg": angle_deg,
         "target_angle_deg": target_angle_deg,
+        "angle1_deg": angle1_deg,
+        "angle2_deg": angle2_deg,
+        "target_angle1_deg": target_angle1_deg,
+        "target_angle2_deg": target_angle2_deg,
         "rewinding": rewinding,
     }

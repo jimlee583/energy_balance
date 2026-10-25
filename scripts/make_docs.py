@@ -452,7 +452,7 @@ def build_document() -> Document:
             ],
             [
                 "PanelConfig",
-                "name, area_m2, normal_face / normal_body, mounting (fixed / 1-axis / 2-axis), rotation_axis_body, cell_efficiency, packing_factor, inherent_degradation, degradation_per_year, mission_year, temperature_loss",
+                "name, area_m2, normal_face / normal_body, mounting (fixed / 1-axis / 2-axis), rotation_axis_body, gimbal_min_deg/gimbal_max_deg/max_slew_rate_deg_s (primary-axis limit: cable-wrap rewind if span >=360 deg, else a hard stop), gimbal2_min_deg/gimbal2_max_deg (2-axis secondary-axis hard stop, +/-90 deg), cell_efficiency, packing_factor, inherent_degradation, degradation_per_year, mission_year, temperature_loss",
             ],
             [
                 "SolarArrayConfig",

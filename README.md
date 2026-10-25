@@ -12,7 +12,8 @@ app simulates the satellite over many orbits and reports:
 - a pass/fail verdict against the depth-of-discharge limit and power budget
 - sizing hints for the minimum solar array area and battery capacity
 - an optional seasonal (year-long) sweep of beta angle and eclipse fraction
-- optional twist-cap limits and rate-limited rewinds for 1-axis solar-array gimbals
+- optional gimbal travel limits (cable-wrap rewind or hard mechanical stops) for 1-axis
+  and 2-axis solar-array gimbals
 
 ## Install and run
 
@@ -67,14 +68,29 @@ voltage as unmet load.
 This is a pack-level energy and voltage model. In DET mode, the current version does not
 solve a solar-array I-V curve at the battery-clamped operating voltage.
 
-## Twist-cap gimbals
+## Gimbal travel limits
 
-For a 1-axis array, enable **Twist-cap gimbal** in the Solar arrays sidebar and enter the
-minimum angle, maximum angle, and maximum slew rate. Limits must contain the 0° rest
-position and span at least 360°. The drive stays on its current continuous Sun-tracking
-branch until it reaches a limit, then slews in the reverse direction toward the equivalent
-angle 360° away. Generated power uses the array's actual orientation during that rewind.
+Both 1-axis and 2-axis arrays support a limit on the **primary** gimbal axis (the one
+driven by `rotation_axis_body`): enable **Limit gimbal travel** / **Limit primary axis
+travel** in the Solar arrays sidebar and enter the minimum angle, maximum angle, and
+maximum slew rate. Limits must contain the 0° rest position.
 
-The Frames tab plots the legal Sun-tracking target against the actual gimbal angle and marks
-rewind intervals. The model does not currently optimize rewind timing around eclipse; a
-rewind begins when continued tracking would cross a configured limit.
+- A span of **360° or more** is a cable-wrap limit: the drive stays on its current
+  continuous Sun-tracking branch until it reaches a limit, then slews in the reverse
+  direction toward the equivalent angle 360° away. Generated power uses the array's
+  actual orientation during that rewind.
+- A span **under 360°** is a hard mechanical stop: the drive simply clamps at the limit,
+  with no rewind. If the Sun moves out of reach, incidence (and generated power) degrades
+  smoothly until the Sun comes back within range.
+
+2-axis arrays additionally support an independent **secondary axis** limit (**Limit
+secondary axis travel**), bounded to ±90°, always a hard stop (a 2-axis gimbal's
+secondary/tip angle can never exceed that range). The two axes clamp independently, so a
+2-axis panel can have, for example, ±80° on the primary axis and ±70° on the secondary
+axis at the same time.
+
+The Frames tab plots the legal Sun-tracking target against the actual gimbal angle(s) for
+every limited axis and marks rewind intervals (primary axis, cable-wrap mode only). The
+model does not currently optimize rewind timing around eclipse; a rewind begins when
+continued tracking would cross a configured limit. For a limited 2-axis panel, the
+"Inspect frame" table reports both axis angles and whether either is pinned at its limit.

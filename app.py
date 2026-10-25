@@ -1291,6 +1291,36 @@ def _arrow_pair(
     return [line, cone]
 
 
+def _axis_line_trace(
+    center: np.ndarray,
+    direction: np.ndarray,
+    length: float,
+    color: str,
+    label: str,
+    scene: str,
+    *,
+    showlegend: bool = True,
+) -> go.Scatter3d:
+    """A dashed line through ``center`` spanning +-``length`` along ``direction``.
+
+    Used for a gimbal rotation axis, which (unlike a vector arrow) has no
+    preferred direction, so it is drawn symmetrically with no arrowhead.
+    """
+    c = np.asarray(center, dtype=float)
+    d = np.asarray(direction, dtype=float)
+    norm = float(np.linalg.norm(d))
+    d_unit = np.array([0.0, 0.0, 1.0]) if norm < 1e-12 else d / norm
+    a = c - d_unit * length
+    b = c + d_unit * length
+    return go.Scatter3d(
+        x=[a[0], b[0]], y=[a[1], b[1]], z=[a[2], b[2]],
+        mode="lines",
+        line=dict(color=color, width=5, dash="longdash"),
+        name=label, hoverinfo="name",
+        showlegend=showlegend, scene=scene,
+    )
+
+
 def _satellite_frame_traces(
     center: np.ndarray,
     rot_display: np.ndarray,
@@ -1340,6 +1370,29 @@ def _satellite_frame_traces(
         )
     )
 
+    # Body face labels (+X/-X/+Y/-Y/+Z/-Z) just outside the bus cube.
+    if flags.get("face_labels"):
+        face_dirs = [
+            (np.array([1.0, 0.0, 0.0]), "+X"),
+            (np.array([-1.0, 0.0, 0.0]), "-X"),
+            (np.array([0.0, 1.0, 0.0]), "+Y"),
+            (np.array([0.0, -1.0, 0.0]), "-Y"),
+            (np.array([0.0, 0.0, 1.0]), "+Z"),
+            (np.array([0.0, 0.0, -1.0]), "-Z"),
+        ]
+        label_pos = np.array(
+            [center + rot_display @ (d * s * 1.3) for d, _ in face_dirs]
+        )
+        traces.append(
+            go.Scatter3d(
+                x=label_pos[:, 0], y=label_pos[:, 1], z=label_pos[:, 2],
+                mode="text", text=[lbl for _, lbl in face_dirs],
+                textfont=dict(size=13),
+                name="Body faces", hoverinfo="skip",
+                showlegend=False, scene=scene,
+            )
+        )
+
     # Plates and booms.
     boom_xs: list[float | None] = []
     boom_ys: list[float | None] = []
@@ -1347,6 +1400,7 @@ def _satellite_frame_traces(
     plate_centers_display: list[np.ndarray] = []
     axis_side: dict[tuple[float, float, float], int] = {}
     paired_wings = len(cfg.solar_array.panels) == 2
+    max_plate_reach = 0.0
 
     for i, panel in enumerate(cfg.solar_array.panels):
         area = max(float(panel.area_m2), 0.01)
@@ -1386,6 +1440,7 @@ def _satellite_frame_traces(
                 sign = axis_side.get(key, +1)
                 axis_side[key] = -sign
             boom_len = s + l_edge * 0.5
+            max_plate_reach = max(max_plate_reach, boom_len + l_edge * 0.5)
             plate_center_body = sign * axis_body * boom_len
             bs_d = rot_display @ (sign * axis_body * s) + center
             be_d = rot_display @ plate_center_body + center
@@ -1483,6 +1538,50 @@ def _satellite_frame_traces(
                 _arrow_pair(center, center + dir_disp * arrow_len, c, label, scene,
                             showlegend=show_legend_here)
             )
+
+    # Gimbal rotation axes: one line per array for 1-axis tracking, two
+    # (primary + secondary) for 2-axis tracking. Deduplicated so paired wings
+    # sharing the same physical axis only draw (and label) it once.
+    if flags.get("gimbal_axes"):
+        # A gimbal axis commonly runs along the same line as a panel's boom,
+        # so draw it long enough to poke out past the panel tips -- otherwise
+        # it is invisible underneath the opaque boom/plate geometry.
+        axis_len = max(arrow_len, max_plate_reach * 1.25)
+        seen_primary: set[tuple[float, float, float]] = set()
+        seen_secondary: set[tuple[float, float, float]] = set()
+        for panel in cfg.solar_array.panels:
+            if panel.mounting is PanelMounting.FIXED:
+                continue
+            axis_b = np.array(panel.rotation_axis_body, dtype=float)
+            axis_norm = np.linalg.norm(axis_b)
+            axis_b = axis_b / axis_norm if axis_norm > 1e-9 else np.array([0.0, 1.0, 0.0])
+            key = tuple(np.round(axis_b, 6).tolist())
+            if key not in seen_primary:
+                seen_primary.add(key)
+                traces.append(
+                    _axis_line_trace(
+                        center, rot_display @ axis_b, axis_len,
+                        "#ff7f0e", "Gimbal axis (primary)", scene,
+                        showlegend=len(seen_primary) == 1,
+                    )
+                )
+            if panel.mounting is PanelMounting.TWO_AXIS:
+                normal_b = np.array(panel.normal_body, dtype=float)
+                normal_b = normal_b / max(np.linalg.norm(normal_b), 1e-12)
+                a2_b = np.cross(axis_b, normal_b)
+                a2_norm = np.linalg.norm(a2_b)
+                if a2_norm > 1e-9:
+                    a2_b = a2_b / a2_norm
+                    key2 = tuple(np.round(a2_b, 6).tolist())
+                    if key2 not in seen_secondary:
+                        seen_secondary.add(key2)
+                        traces.append(
+                            _axis_line_trace(
+                                center, rot_display @ a2_b, axis_len,
+                                "#e377c2", "Gimbal axis (secondary)", scene,
+                                showlegend=len(seen_secondary) == 1,
+                            )
+                        )
 
     # Local-frame arrows.
     if flags.get("velocity"):
@@ -1594,7 +1693,9 @@ def _render_frames(df: pd.DataFrame) -> None:
         "draws a rectangular solar ray out the plus and minus side of each array, with a yellow "
         "arrow normal to that rectangle and pointed at the Sun. 1-axis "
         "arrays continue to track the geometric Sun direction while in eclipse (no rest-mode "
-        "command is modeled)."
+        "command is modeled). The close-up scene can also label the bus cube's +X/-X/+Y/-Y/+Z/-Z "
+        "faces and draw each array's gimbal rotation axis (one line for 1-axis tracking, two for "
+        "2-axis tracking)."
     )
 
     # ------------------------------------------------------------------
@@ -1616,7 +1717,7 @@ def _render_frames(df: pd.DataFrame) -> None:
     )
 
     ck = st.columns(4)
-    show_trail = ck[0].checkbox("Orbit trail (left scene)", value=True)
+    show_trail = ck[0].checkbox("Orbit trail (top scene)", value=True)
     show_axes = ck[1].checkbox("Body axes", value=True)
     show_sun = ck[2].checkbox("Sun arrow at satellite", value=True)
     show_panel_normals = ck[3].checkbox("Panel normals", value=True)
@@ -1624,6 +1725,16 @@ def _render_frames(df: pd.DataFrame) -> None:
     show_velocity = ck2[0].checkbox("Velocity", value=True)
     show_nadir = ck2[1].checkbox("Nadir", value=False)
     show_normal = ck2[2].checkbox("Orbit normal", value=False)
+    ck3 = st.columns(2)
+    show_face_labels = ck3[0].checkbox(
+        "Body face labels (close-up)", value=True,
+        help="Label the +X/-X/+Y/-Y/+Z/-Z faces of the bus cube in the satellite close-up scene.",
+    )
+    show_gimbal_axes = ck3[1].checkbox(
+        "Gimbal rotation axes (close-up)", value=True,
+        help="Draw each array's gimbal rotation axis in the satellite close-up scene: one line "
+             "for 1-axis tracking, two for 2-axis tracking.",
+    )
 
     # ------------------------------------------------------------------
     # Simulation slice for the chosen orbit
@@ -1760,7 +1871,12 @@ def _render_frames(df: pd.DataFrame) -> None:
         "orbit_normal": show_normal, "panel_normals": show_panel_normals,
         "sun_arrow": show_sun, "trail": show_trail,
     }
-    flags_s2 = {**flags_s1, "trail": False}
+    flags_s2 = {
+        **flags_s1,
+        "trail": False,
+        "face_labels": show_face_labels,
+        "gimbal_axes": show_gimbal_axes,
+    }
     trail_window = max(1, K // 8)
 
     def _frame_traces(k: int) -> tuple[list[go.BaseTraceType], list[go.BaseTraceType]]:

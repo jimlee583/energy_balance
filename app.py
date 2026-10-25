@@ -1874,8 +1874,8 @@ def _render_frames(df: pd.DataFrame) -> None:
     # Reserve a header at the top of the figure (title, then Play/Pause),
     # then split the remaining height between the two stacked scenes, each
     # with its own subplot-label strip just above it.
-    scene1_top, scene1_bottom = 0.90, 0.50
-    scene2_top, scene2_bottom = 0.46, 0.0
+    scene1_top, scene1_bottom = 0.94, 0.52
+    scene2_top, scene2_bottom = 0.48, 0.0
     fig.layout.annotations[0].update(y=scene1_top, yanchor="bottom")
     fig.layout.annotations[1].update(y=scene2_top, yanchor="bottom")
 
@@ -1885,7 +1885,9 @@ def _render_frames(df: pd.DataFrame) -> None:
         showticklabels=False, showgrid=False, zeroline=False,
         showbackground=False, showspikes=False, showline=False, ticks="",
     )
-    scene_half_s2 = max(arrow_len_s2, sun_arrow_len_s2) * 1.15
+    # Extra padding (vs. scene 1) because the closer camera used below leaves
+    # less visible margin around the axis range's own edges.
+    scene_half_s2 = max(arrow_len_s2, sun_arrow_len_s2) * 1.35
     blank_axis_s2 = dict(
         title="", range=[-scene_half_s2, scene_half_s2],
         showticklabels=False, showgrid=False, zeroline=False,
@@ -1903,7 +1905,13 @@ def _render_frames(df: pd.DataFrame) -> None:
 
     fig.update_layout(
         title=_figure_title(0),
-        height=1500,
+        # Plotly 3D scenes letterbox to a square sized by the smaller of a
+        # scene's domain width/height in pixels, so a wide-but-short domain
+        # wastes most of its width. The figure is tall enough that each
+        # stacked scene's own pixel height is comparable to the full page
+        # width, so each one actually fills the width instead of shrinking
+        # to a small centered square.
+        height=2800,
         # Keep user camera changes through Plotly's animated redraws. Without a
         # stable uirevision, pressing Play restores the original zoom.
         uirevision="frames-camera",
@@ -1914,7 +1922,7 @@ def _render_frames(df: pd.DataFrame) -> None:
             uirevision="frames-camera",
             domain=dict(x=[0.0, 1.0], y=[scene1_bottom, scene1_top]),
             camera=dict(
-                eye=dict(x=0.0, y=-2.4, z=0.35),
+                eye=dict(x=0.0, y=-1.2, z=0.18),
                 up=dict(x=0, y=0, z=1),
                 center=dict(x=0, y=0, z=0),
             ),
@@ -1925,7 +1933,7 @@ def _render_frames(df: pd.DataFrame) -> None:
             uirevision="frames-camera",
             domain=dict(x=[0.0, 1.0], y=[scene2_bottom, scene2_top]),
             camera=dict(
-                eye=dict(x=1.45, y=1.45, z=1.05),
+                eye=dict(x=0.75, y=0.75, z=0.55),
                 center=dict(x=0, y=0, z=0),
             ),
             xaxis=blank_axis_s2, yaxis=blank_axis_s2, zaxis=blank_axis_s2,

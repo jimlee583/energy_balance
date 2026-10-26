@@ -354,7 +354,7 @@ def _panels_inputs(cfg: SimulationConfig) -> SolarArrayConfig:
                 axis_label = "primary axis" if mounting is PanelMounting.TWO_AXIS else "gimbal"
                 twist_enabled = st.checkbox(
                     f"Limit {axis_label} travel",
-                    value=default.gimbal_min_deg is not None,
+                    value=True,
                     key="ptwist0",
                     help=(
                         "Limit accumulated gimbal travel. A span of 360° or more unwinds "
@@ -370,7 +370,7 @@ def _panels_inputs(cfg: SimulationConfig) -> SolarArrayConfig:
                         value=float(
                             default.gimbal_min_deg
                             if default.gimbal_min_deg is not None
-                            else -270.0
+                            else -180.0
                         ),
                         step=10.0,
                         key="pgmin0",
@@ -380,7 +380,7 @@ def _panels_inputs(cfg: SimulationConfig) -> SolarArrayConfig:
                         value=float(
                             default.gimbal_max_deg
                             if default.gimbal_max_deg is not None
-                            else 270.0
+                            else 180.0
                         ),
                         step=10.0,
                         key="pgmax0",
@@ -421,7 +421,7 @@ def _panels_inputs(cfg: SimulationConfig) -> SolarArrayConfig:
             if mounting is PanelMounting.TWO_AXIS:
                 twist2_enabled = st.checkbox(
                     "Limit secondary axis travel",
-                    value=default.gimbal2_min_deg is not None,
+                    value=True,
                     key="ptwist2_0",
                     help=(
                         "Hard mechanical stop on the second gimbal axis, bounded to "
@@ -438,7 +438,7 @@ def _panels_inputs(cfg: SimulationConfig) -> SolarArrayConfig:
                         value=float(
                             default.gimbal2_min_deg
                             if default.gimbal2_min_deg is not None
-                            else -70.0
+                            else -60.0
                         ),
                         step=5.0,
                         key="pg2min0",
@@ -450,7 +450,7 @@ def _panels_inputs(cfg: SimulationConfig) -> SolarArrayConfig:
                         value=float(
                             default.gimbal2_max_deg
                             if default.gimbal2_max_deg is not None
-                            else 70.0
+                            else 60.0
                         ),
                         step=5.0,
                         key="pg2max0",

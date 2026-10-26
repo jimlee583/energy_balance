@@ -2108,22 +2108,37 @@ def _render_frames(df: pd.DataFrame) -> None:
     fig_cos.update_yaxes(range=[0.0, 1.02], tick0=0.0, dtick=0.25, tickformat=".2f")
     st.plotly_chart(fig_cos, width='stretch')
 
-    tracking_pairs = [
-        (p.name, angle_k[i])
-        for i, p in enumerate(cfg.solar_array.panels)
-        if p.mounting is not PanelMounting.FIXED
+    tracking_panels = [
+        (i, p) for i, p in enumerate(cfg.solar_array.panels) if p.mounting is not PanelMounting.FIXED
     ]
-    if tracking_pairs:
-        gimbal_df = pd.DataFrame(
-            {name: angles for name, angles in tracking_pairs},
-            index=pd.Index(minutes_k, name="Minutes since orbit start"),
+    if tracking_panels:
+        fig_g = go.Figure()
+        # Actual gimbal angle per axis: 1-axis panels have one angular
+        # position, 2-axis panels have two (axis1 = primary, axis2 =
+        # secondary), always shown regardless of whether a limit is set.
+        for i, panel in tracking_panels:
+            is_two_axis = panel.mounting is PanelMounting.TWO_AXIS
+            fig_g.add_trace(
+                go.Scatter(
+                    x=minutes_k, y=angle1_k[i],
+                    name=f"{panel.name} axis1" if is_two_axis else panel.name,
+                    mode="lines",
+                )
+            )
+            if is_two_axis:
+                fig_g.add_trace(
+                    go.Scatter(
+                        x=minutes_k, y=angle2_k[i],
+                        name=f"{panel.name} axis2", mode="lines",
+                        line=dict(dash="dash"),
+                    )
+                )
+        fig_g.update_layout(
+            title="Actual gimbal angle per tracking panel (deg)",
+            xaxis_title="Minutes since orbit start",
+            yaxis_title="Actual angle (deg)",
         )
-        fig_g = px.line(
-            gimbal_df,
-            title="Actual gimbal / slew angle per tracking panel (deg)",
-            labels={"value": "Actual angle (deg)", "variable": "Panel"},
-        )
-        for i, panel in enumerate(cfg.solar_array.panels):
+        for i, panel in tracking_panels:
             if panel.mounting is PanelMounting.ONE_AXIS:
                 if panel.gimbal_min_deg is None:
                     continue
@@ -2150,12 +2165,6 @@ def _render_frames(df: pd.DataFrame) -> None:
                 if panel.gimbal_min_deg is not None:
                     fig_g.add_trace(
                         go.Scatter(
-                            x=minutes_k, y=angle1_k[i],
-                            name=f"{panel.name} axis1", mode="lines",
-                        )
-                    )
-                    fig_g.add_trace(
-                        go.Scatter(
                             x=minutes_k, y=target_angle1_k[i],
                             name=f"{panel.name} axis1 target", mode="lines",
                             line=dict(dash="dot"),
@@ -2172,12 +2181,6 @@ def _render_frames(df: pd.DataFrame) -> None:
                         annotation_text=f"{panel.name} axis1 max",
                     )
                 if panel.gimbal2_min_deg is not None:
-                    fig_g.add_trace(
-                        go.Scatter(
-                            x=minutes_k, y=angle2_k[i],
-                            name=f"{panel.name} axis2", mode="lines",
-                        )
-                    )
                     fig_g.add_trace(
                         go.Scatter(
                             x=minutes_k, y=target_angle2_k[i],

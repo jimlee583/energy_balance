@@ -167,6 +167,107 @@ def test_twist_limited_panel_rewinds_at_rate_and_loses_incidence():
     assert out["cos_incidence"][-1] == pytest.approx(0.0)
 
 
+def _sun_in_xz(ideal_deg: np.ndarray) -> np.ndarray:
+    """Sun directions in the XZ plane at the given ideal 1-axis gimbal angles."""
+    return np.stack(
+        [
+            np.sin(np.deg2rad(ideal_deg)),
+            np.zeros_like(ideal_deg),
+            np.cos(np.deg2rad(ideal_deg)),
+        ],
+        axis=-1,
+    )
+
+
+@pytest.mark.parametrize(
+    ("minimum", "maximum", "mode"),
+    [(-180.0, 180.0, "cable-wrap"), (-150.0, 150.0, "hard stop")],
+)
+def test_limited_gimbal_starts_on_command_not_at_rest(minimum, maximum, mode):
+    """A limited gimbal must begin already tracking, with no startup slew.
+
+    Starting from the 0-degree rest position would open every run with a slew
+    of up to a full revolution that belongs to the initial condition rather
+    than to the orbit, which shows up as the array visibly flipping in the
+    first seconds of the Frames animation.
+    """
+    panel = PanelConfig(
+        name="limited",
+        area_m2=1.0,
+        normal_face="+Z",
+        mounting=PanelMounting.ONE_AXIS,
+        rotation_axis_body=(0.0, 1.0, 0.0),
+        gimbal_min_deg=minimum,
+        gimbal_max_deg=maximum,
+        # Deliberately slow: starting at rest would take 130 s to catch up, so
+        # any residual transient is impossible to miss.
+        max_slew_rate_deg_s=1.0,
+    )
+    ideal_deg = np.array([130.0, 131.0, 132.0])
+    times_s = np.array([0.0, 1.0, 2.0])
+
+    out = panel_frames_eci(panel, _identity_rotations(3), _sun_in_xz(ideal_deg), times_s)
+
+    # On command at epoch, and tracking exactly from there: 1 deg/s is enough
+    # for a 1 deg/sample command, so there is no catch-up anywhere.
+    assert out["angle_deg"][0] == pytest.approx(out["target_angle_deg"][0])
+    np.testing.assert_allclose(out["angle_deg"], ideal_deg, atol=1e-9)
+    np.testing.assert_allclose(out["cos_incidence"], 1.0, atol=1e-9)
+    assert not out["rewinding"].any(), f"{mode} should not rewind while tracking"
+    assert np.all(out["angle_deg"] >= minimum - 1e-9)
+    assert np.all(out["angle_deg"] <= maximum + 1e-9)
+
+
+def test_hard_stopped_gimbal_starts_pinned_at_its_limit():
+    """Out of reach at epoch means starting pinned, which is not a transient."""
+    panel = PanelConfig(
+        name="out-of-reach",
+        area_m2=1.0,
+        normal_face="+Z",
+        mounting=PanelMounting.ONE_AXIS,
+        rotation_axis_body=(0.0, 1.0, 0.0),
+        gimbal_min_deg=-90.0,
+        gimbal_max_deg=90.0,
+        max_slew_rate_deg_s=1.0,
+    )
+    ideal_deg = np.array([150.0, 150.0])
+
+    out = panel_frames_eci(
+        panel, _identity_rotations(2), _sun_in_xz(ideal_deg), np.array([0.0, 1.0])
+    )
+
+    # Clamped to the stop immediately rather than crawling there from rest.
+    np.testing.assert_allclose(out["angle_deg"], [90.0, 90.0], atol=1e-9)
+    np.testing.assert_allclose(out["target_angle_deg"], [90.0, 90.0], atol=1e-9)
+    # 60 deg short of the Sun, and staying there.
+    np.testing.assert_allclose(out["cos_incidence"], np.cos(np.deg2rad(60.0)), atol=1e-9)
+
+
+def test_two_axis_limited_gimbal_starts_on_command_on_both_axes():
+    panel = PanelConfig(
+        name="2ax-limited",
+        area_m2=1.0,
+        normal_face="+Z",
+        mounting=PanelMounting.TWO_AXIS,
+        rotation_axis_body=(0.0, 1.0, 0.0),
+        gimbal_min_deg=-180.0,
+        gimbal_max_deg=180.0,
+        gimbal2_min_deg=-60.0,
+        gimbal2_max_deg=60.0,
+        max_slew_rate_deg_s=1.0,
+    )
+    # Well away from rest on both axes at epoch.
+    sun = np.array([[0.5, 0.5, -0.70710678], [0.5, 0.5, -0.70710678]])
+    sun = sun / np.linalg.norm(sun, axis=-1, keepdims=True)
+
+    out = panel_frames_eci(panel, _identity_rotations(2), sun, np.array([0.0, 1.0]))
+
+    assert out["angle1_deg"][0] == pytest.approx(out["target_angle1_deg"][0])
+    assert out["angle2_deg"][0] == pytest.approx(out["target_angle2_deg"][0])
+    # A 2-axis array that starts on command is square to the Sun from t=0.
+    assert out["cos_incidence"][0] == pytest.approx(1.0, abs=1e-9)
+
+
 @pytest.mark.parametrize(
     ("minimum", "maximum"),
     [

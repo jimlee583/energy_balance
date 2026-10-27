@@ -298,9 +298,7 @@ def _figure_trace(path: Path) -> None:
     ax.set_yticks([0.0, 0.5, 1.0])
     ax.set_xlabel("time from epoch (min)         shaded bands = eclipse")
     ax.set_xlim(0, minutes[-1])
-    ax.annotate("start-up slew from\nthe rest position", xy=(1.6, 0.08), xytext=(9, 0.30),
-                fontsize=7.5, color=GREY, ha="left",
-                arrowprops=dict(arrowstyle="-|>", color=GREY, lw=0.9))
+    # No start-up slew to call out: the drives begin on command (see section 6.6).
     ax.annotate("elevation pinned at the stop", xy=(79.5, 0.855), xytext=(96, 0.42),
                 fontsize=7.5, color=GREEN, ha="left",
                 arrowprops=dict(arrowstyle="-|>", color=GREEN, lw=0.9))

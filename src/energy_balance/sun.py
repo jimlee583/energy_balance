@@ -12,7 +12,8 @@ from datetime import datetime
 
 import numpy as np
 
-from .orbit import julian_date
+from .eclipse import analytic_eclipse_fraction
+from .orbit import R_EARTH_KM, OrbitState, julian_date, propagate_orbit
 
 AU_KM = 149_597_870.7
 
@@ -92,9 +93,41 @@ def seasonal_sweep(
     return times_s, u
 
 
+def seasonal_beta_eclipse(
+    orbit_state: OrbitState,
+    epoch: datetime,
+    step_days: float = 5.0,
+    duration_days: float = 365.0,
+) -> dict[str, np.ndarray]:
+    """Beta angle and eclipse fraction over a season, with the orbit plane precessing.
+
+    The orbit's angular momentum direction is re-derived from the propagated
+    position/velocity at every sample (the same ``r x v`` the main
+    simulation uses), so secular J2 nodal regression carries through to the
+    beta-angle history instead of freezing the orbit plane at epoch. Beta
+    then reflects the true relative period between the orbit node's
+    precession and the Sun's apparent annual motion, not just the Sun's
+    ~365-day period.
+
+    Returns a dict with ``times_s`` (s), ``beta_deg``, and
+    ``eclipse_fraction`` (the circular-orbit analytic approximation, using
+    the orbit's semi-major axis as a representative altitude).
+    """
+    times_s, u_sun = seasonal_sweep(epoch, step_days=step_days, duration_days=duration_days)
+    orbit = propagate_orbit(orbit_state, times_s)
+    h_eci = np.cross(orbit["r_eci_km"], orbit["v_eci_km_s"])
+    beta_deg = beta_angle_deg(h_eci, u_sun)
+    altitude_km = orbit_state.a - R_EARTH_KM
+    eclipse_fraction = np.array(
+        [analytic_eclipse_fraction(altitude_km, b) for b in beta_deg]
+    )
+    return {"times_s": times_s, "beta_deg": beta_deg, "eclipse_fraction": eclipse_fraction}
+
+
 __all__ = [
     "AU_KM",
     "beta_angle_deg",
+    "seasonal_beta_eclipse",
     "seasonal_sweep",
     "sun_vector_at",
     "sun_vector_eci",

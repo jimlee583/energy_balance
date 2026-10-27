@@ -68,6 +68,14 @@ def _rewind_branch_angles(
     leaves the legal travel interval. The controller then selects an
     equivalent branch inside the interval and rate-limits the actual angle
     while the gimbal unwinds toward it.
+
+    The gimbal starts already on its Sun-tracking command rather than at the
+    0-degree rest position, so epoch is a spacecraft that has been tracking
+    all along rather than one that has just deployed. Starting at rest would
+    open the run with a slew of up to a full revolution that is an artifact of
+    the initial condition, not of the orbit. The starting branch is still the
+    legal one nearest rest, so the drive begins unwound and the first rewind
+    is driven by the orbit.
     """
     target = np.empty_like(ideal_unwrapped)
     actual = np.empty_like(ideal_unwrapped)
@@ -82,7 +90,8 @@ def _rewind_branch_angles(
 
     branch = _legal_branch(0.0, float(ideal_unwrapped[0]))
     target[0] = ideal_unwrapped[0] + 360.0 * branch
-    actual[0] = 0.0
+    # Already on command at epoch; _legal_branch keeps this inside the limits.
+    actual[0] = target[0]
     rewind_active = False
 
     for i in range(1, len(ideal_unwrapped)):
@@ -122,10 +131,15 @@ def _hard_stop_angles(
     gimbal rate-limits its way toward that clamped target. The Sun can go out
     of reach, in which case the panel stays pinned at the nearer limit and
     incidence degrades.
+
+    As in the cable-wrap case the gimbal starts already on its (clamped)
+    command rather than at the 0-degree rest position, so the run does not
+    open with a slew that is an artifact of the initial condition.
     """
     target = np.clip(ideal_unwrapped, minimum_deg, maximum_deg)
     actual = np.empty_like(target)
-    actual[0] = np.clip(0.0, minimum_deg, maximum_deg)
+    # Already on command at epoch; target is clipped, so this is within limits.
+    actual[0] = target[0]
     for i in range(1, len(target)):
         max_step = slew_rate_deg_s * float(times_s[i] - times_s[i - 1])
         error = target[i] - float(actual[i - 1])

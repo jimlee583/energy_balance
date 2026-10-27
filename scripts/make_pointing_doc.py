@@ -826,13 +826,23 @@ def build_document(figures: dict[str, Path]) -> Document:
     )
     _add_para(
         doc,
-        "Both limited modes start the simulation with the drive at 0°, the rest position "
-        "(clamped into the interval, though validation already guarantees 0° is legal). If "
-        "the Sun is somewhere else at epoch, the first seconds of the run show the array slewing "
-        "from rest to its tracking attitude at the maximum rate. This start-up transient is "
-        "physical, not a numerical artefact, but it is an arbitrary initial condition: a real "
-        "spacecraft would usually enter the analysis window already tracking. Section 9.3 "
-        "quantifies it for the defaults — a 180° slew taking three minutes.",
+        "Both limited modes start the simulation with the drive already on its command rather "
+        "than at the 0° rest position: actual[0] is set to target[0], which the branch "
+        "selection and the clamp both guarantee lies inside the legal interval. Epoch is "
+        "therefore a spacecraft that has been tracking all along, not one that has just "
+        "deployed. Starting from rest instead would open every run with a slew of up to a full "
+        "revolution — 180° taking three minutes in the default configuration — that belongs to "
+        "the initial condition rather than to the orbit, and that shows up as the array visibly "
+        "flipping in the first seconds of the Frames animation.",
+    )
+    _add_para(
+        doc,
+        "Two details follow from this. For a cable-wrap axis the starting branch is still the "
+        "legal one nearest rest, so the drive begins unwound and the first rewind, if any, is "
+        "driven by the orbit rather than by where the simulation happened to start. For a "
+        "hard-stop axis whose Sun is already out of reach at epoch, the command is the clamped "
+        "one, so the drive starts pinned at the nearer stop — that is a limit being hit, not a "
+        "transient. Section 9.3 shows the first samples of the default case.",
     )
 
     _add_heading(doc, "6.7 Recombining the two axes", 2)
@@ -1048,24 +1058,26 @@ def build_document(figures: dict[str, Path]) -> Document:
         "twice per orbit — straight through the elevation singularity of section 5.4.",
     )
 
-    _add_heading(doc, "9.3 The start-up transient", 2)
+    _add_heading(doc, "9.3 The first samples", 2)
     _add_para(
         doc,
-        "Both drives begin at 0°. The azimuth command is already at +179.9°, so the "
-        "primary axis slews the whole way at 1 °/s while the elevation axis, whose command is "
-        "still near zero, tracks exactly:",
+        "Both drives begin on command. The azimuth command is already at +179.9° at epoch and "
+        "the drive is there too, so nothing has to catch up: both axes track exactly from the "
+        "first sample and the incidence factor is 1.0000 throughout. The elevation command "
+        "walks away from rest at about 0.057 °/s, far inside the 1 °/s cap, so it is never "
+        "rate limited either:",
     )
     _add_table(
         doc,
         ["t (s)", "θ₁ command", "θ₁ actual", "θ₂ command",
          "θ₂ actual", "cos(inc)"],
         [
-            ["0", "+179.909°", "0.000°", "+0.060°", "0.000°", "0.0000"],
-            ["30", "+179.909°", "+30.000°", "+1.771°", "+1.771°", "0.0000"],
-            ["60", "+179.910°", "+60.000°", "+3.481°", "+3.481°", "0.0000"],
-            ["90", "+179.910°", "+90.000°", "+5.191°", "+5.191°", "0.0097"],
-            ["120", "+179.910°", "+120.000°", "+6.901°", "+6.901°", "0.5086"],
-            ["150", "+179.911°", "+150.000°", "+8.612°", "+8.612°", "0.8698"],
+            ["0", "+179.909°", "+179.909°", "+0.060°", "+0.060°", "1.0000"],
+            ["30", "+179.909°", "+179.909°", "+1.771°", "+1.771°", "1.0000"],
+            ["60", "+179.910°", "+179.910°", "+3.481°", "+3.481°", "1.0000"],
+            ["90", "+179.910°", "+179.910°", "+5.191°", "+5.191°", "1.0000"],
+            ["120", "+179.910°", "+179.910°", "+6.901°", "+6.901°", "1.0000"],
+            ["150", "+179.911°", "+179.911°", "+8.612°", "+8.612°", "1.0000"],
             ["180", "+179.911°", "+179.911°", "+10.322°", "+10.322°",
              "1.0000"],
         ],
@@ -1073,11 +1085,15 @@ def build_document(figures: dict[str, Path]) -> Document:
     )
     _add_para(
         doc,
-        "Full tracking is reached 180 s after epoch — exactly the 180° of travel divided "
-        "by the 1 °/s rate cap. Those six partly wasted samples cost roughly 75 Wh, which is "
-        "essentially the whole difference between the “primary limit only” and "
-        "“no limits” rows of the sensitivity table in section 9.6. Again, this is an initial-condition artefact: it "
-        "would not appear in a run that started from an already-tracking attitude.",
+        "It is worth seeing what the alternative would have cost. Had the drives started at "
+        "the 0° rest position, the primary axis would have needed its full 180° of travel at "
+        "1 °/s — exactly 180 s, six samples — before the incidence factor first reached "
+        "1.0000, and the array would have been nearly edge-on to the Sun for the first two "
+        "minutes of every run. Those six partly wasted samples are worth roughly 75 Wh over "
+        "the day, which is essentially the whole difference between the “primary limit only” "
+        "and “no limits” rows of the sensitivity table in section 9.6. The arithmetic is real, "
+        "but it measures where the simulation happens to begin rather than anything about the "
+        "orbit or the limits, which is why the model starts the drive on command instead.",
     )
 
     _add_heading(doc, "9.4 One orbit in steady state", 2)
@@ -1134,8 +1150,8 @@ def build_document(figures: dict[str, Path]) -> Document:
         "Figure 3. Two orbits of the default configuration. Top: the azimuth axis librates between "
         "0° and ±180°, flipping as the Sun crosses the boom; the rate cap rounds "
         "each flip. Middle: the elevation command is a near-triangular sweep whose peaks are cut "
-        "off by the ±60° stops. Bottom: the resulting incidence factor, with the "
-        "start-up slew at the left and a shallow dip at each saturation.",
+        "off by the ±60° stops. Bottom: the resulting incidence factor, which holds at 1.0 "
+        "from epoch and dips shallowly at each saturation.",
         width=6.2,
     )
 
@@ -1152,8 +1168,8 @@ def build_document(figures: dict[str, Path]) -> Document:
             ["Azimuth rate the ideal command demands", "up to 5.92 °/s; exceeds the 1 °/s "
                                                        "cap on 45 samples per day"],
             ["Elevation rate demanded", "at most 0.057 °/s — never rate limited"],
-            ["Mean cos(incidence) in sunlight", "0.9771 (minimum 0.8562)"],
-            ["Mean / 95th percentile / worst off-Sun angle", "7.58° / 27.58° / "
+            ["Mean cos(incidence) in sunlight", "0.9773 (minimum 0.8562)"],
+            ["Mean / 95th percentile / worst off-Sun angle", "7.50° / 27.53° / "
                                                              "31.10°"],
             ["Cable-wrap rewinds", "none — the azimuth command never leaves "
                                    "±180°"],
@@ -1182,17 +1198,17 @@ def build_document(figures: dict[str, Path]) -> Document:
         ["Configuration", "Energy (Wh/day)", "vs unlimited", "Mean cos(inc), sunlit"],
         [
             ["2-axis, no limits", "30 731.4", "—", "1.0000"],
-            ["2-axis, ±180° primary only", "30 654.9", "−0.25%", "0.9999"],
-            ["2-axis, ±180° and ±90°", "30 654.9", "−0.25%", "0.9999"],
-            ["2-axis, ±180° and ±60° (sidebar default)", "29 957.9",
-             "−2.52%", "0.9771"],
-            ["2-axis, ±60° secondary only", "30 048.4", "−2.22%", "0.9776"],
-            ["2-axis, ±90° primary and ±60° secondary", "18 471.4",
-             "−39.89%", "0.6069"],
-            ["1-axis about the same boom, unlimited", "16 654.3", "−45.8%", "0.5376"],
-            ["1-axis, ±180° (cable wrap)", "16 549.5", "−46.2%", "0.5366"],
-            ["1-axis, ±90° (hard stop)", "2 345.4", "−92.4%", "0.0777"],
-            ["Fixed panel on the +Z face", "2 006.7", "−93.5%", "0.0666"],
+            ["2-axis, ±180° primary only", "30 729.5", "−0.01%", "0.9999"],
+            ["2-axis, ±180° and ±90°", "30 729.5", "−0.01%", "0.9999"],
+            ["2-axis, ±180° and ±60° (sidebar default)", "30 032.5",
+             "−2.27%", "0.9773"],
+            ["2-axis, ±60° secondary only", "30 048.4", "−2.22%", "0.9778"],
+            ["2-axis, ±90° primary and ±60° secondary", "18 471.5",
+             "−39.89%", "0.6016"],
+            ["1-axis about the same boom, unlimited", "16 654.3", "−45.8%", "0.5419"],
+            ["1-axis, ±180° (cable wrap)", "16 624.2", "−45.9%", "0.5409"],
+            ["1-axis, ±90° (hard stop)", "2 345.5", "−92.4%", "0.0769"],
+            ["Fixed panel on the +Z face", "2 006.7", "−93.5%", "0.0659"],
         ],
         widths=[2.7, 1.2, 1.0, 1.6],
     )
@@ -1200,7 +1216,7 @@ def build_document(figures: dict[str, Path]) -> Document:
         doc,
         "The ordering is instructive. A ±90° secondary stop costs almost nothing here "
         "because the elevation command peaks at 89.84° and barely clips it; tightening that "
-        "same stop to ±60° costs 2.5%. Turning the primary axis from a cable wrap into a "
+        "same stop to ±60° costs 2.3%. Turning the primary axis from a cable wrap into a "
         "±90° hard stop costs 40%, because the azimuth needs to reach ±180° "
         "and simply cannot. The one-axis rows show the geometric ceiling of section 5.2: with the "
         "Sun this close to the boom axis, |ŝ·â₁| averages 0.72 and no "
@@ -1217,20 +1233,22 @@ def build_document(figures: dict[str, Path]) -> Document:
         doc,
         ["Max slew rate", "0.2 °/s", "0.5 °/s", "1.0 °/s (default)",
          "2.0 °/s", "10 °/s"],
-        [["Energy (Wh/day)", "28 793.6", "29 800.3", "29 957.9", "30 006.3", "30 032.3"]],
+        [["Energy (Wh/day)", "29 103.9", "29 938.8", "30 032.5", "30 046.7", "30 048.4"]],
         widths=[1.5, 1.0, 1.0, 1.2, 1.0, 0.8],
     )
     _add_para(
         doc,
-        "Going from 1 °/s to effectively infinite rate recovers only 74 Wh of the 773 Wh the "
+        "Going from 1 °/s to effectively infinite rate recovers only 16 Wh of the 699 Wh the "
         "default limits cost; the rest is the ±60° elevation stop, which no amount of "
-        "slew rate can fix. Dropping to 0.2 °/s, on the other hand, costs a further 1164 Wh, "
-        "because the start-up slew and each azimuth flip now take minutes.",
+        "slew rate can fix. Dropping to 0.2 °/s, on the other hand, costs a further 929 Wh, "
+        "because each azimuth flip then takes minutes. Note how much smaller the top-end "
+        "recovery is than it looks in a model that starts from rest: with no start-up slew to "
+        "pay for, a faster drive has only the flips left to improve.",
     )
     _add_para(
         doc,
-        "For completeness, the default mission as a whole generates 29 957.9 Wh against 19 206.7 "
-        "Wh of load, shunting 7016.9 Wh and reaching a minimum state of charge of 42.1%. That is a "
+        "For completeness, the default mission as a whole generates 30 032.5 Wh against 19 206.7 "
+        "Wh of load, shunting 7088.3 Wh and reaching a minimum state of charge of 42.1%. That is a "
         "positive power budget, though it fails the configured 30% depth-of-discharge limit — "
         "a battery sizing question rather than a pointing one.",
     )
@@ -1248,8 +1266,9 @@ def build_document(figures: dict[str, Path]) -> Document:
             "Rewind scheduling — a cable-wrap rewind starts the moment continued tracking "
             "would cross a limit, with no attempt to defer it into an eclipse where it would be "
             "free.",
-            "Arbitrary initial condition — limited drives start at 0°, so a run whose "
-            "epoch has the Sun far from the rest position opens with a slew transient.",
+            "Already-tracking initial condition — limited drives start on their command "
+            "rather than at 0°, so no run opens with a start-up slew. Acquisition and "
+            "deployment sequences, and the energy they cost, are outside the model.",
             "No self-shadowing or structural blockage — a panel is lit whenever the "
             "spacecraft is lit and the cosine is positive; the bus, antennas and the opposite "
             "wing never cast shadows.",

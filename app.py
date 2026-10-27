@@ -39,8 +39,8 @@ from energy_balance import (
 from energy_balance.attitude import body_to_eci
 from energy_balance.config import BODY_FACES, OrbitSpec
 from energy_balance.eclipse import R_EARTH_KM
-from energy_balance.orbit import OrbitState, propagate_orbit, sun_sync_inclination_deg
-from energy_balance.sun import beta_angle_deg, seasonal_sweep
+from energy_balance.orbit import OrbitState, sun_sync_inclination_deg
+from energy_balance.sun import seasonal_beta_eclipse
 
 st.set_page_config(page_title="Satellite Energy Balance", layout="wide")
 
@@ -1026,24 +1026,20 @@ def _render_battery(df: pd.DataFrame) -> None:
 
 def _render_seasonal(cfg: SimulationConfig) -> None:
     st.caption(
-        "Beta angle and eclipse fraction over one year, computed from the orbit's "
-        "angular momentum vector and the Sun's position. Useful for finding worst-case "
-        "cold (large eclipse) and hot (full sun) seasons."
+        "Beta angle and eclipse fraction over one year. The orbit's angular momentum "
+        "direction is re-propagated at each sample (not frozen at epoch), so J2 nodal "
+        "regression carries through: beta's period reflects the orbit node's precession "
+        "relative to the Sun's apparent motion, not just the Sun's ~365-day cycle. Useful "
+        "for finding worst-case cold (large eclipse) and hot (full sun, eclipse-free) seasons."
     )
     epoch = cfg.mission.epoch
     orbit_state = OrbitState(cfg.orbit, epoch)
-    # Need h_eci. For circular orbits, h is roughly constant in direction. Use r x v at t=0.
-    out = propagate_orbit(orbit_state, np.array([0.0]))
-    h0 = np.cross(out["r_eci_km"][0], out["v_eci_km_s"][0])
-    h0 = h0 / np.linalg.norm(h0)
-
-    times_s, u_sun = seasonal_sweep(epoch, step_days=5.0, duration_days=365.0)
-    betas = beta_angle_deg(np.tile(h0, (u_sun.shape[0], 1)), u_sun)
-    from energy_balance.eclipse import analytic_eclipse_fraction
-
-    altitude_km = orbit_state.a - R_EARTH_KM
-    eclipse_fracs = np.array([analytic_eclipse_fraction(altitude_km, b) for b in betas])
+    seasonal = seasonal_beta_eclipse(orbit_state, epoch, step_days=5.0, duration_days=365.0)
+    times_s = seasonal["times_s"]
+    betas = seasonal["beta_deg"]
+    eclipse_fracs = seasonal["eclipse_fraction"]
     days = times_s / 86400.0
+    altitude_km = orbit_state.a - R_EARTH_KM
 
     seasonal_df = pd.DataFrame(
         {

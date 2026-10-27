@@ -89,6 +89,26 @@ secondary/tip angle can never exceed that range). The two axes clamp independent
 2-axis panel can have, for example, ±80° on the primary axis and ±70° on the secondary
 axis at the same time.
 
+## Frames tab views
+
+The Frames tab animates one orbit across three stacked 3D scenes:
+
+1. **Earth-centered inertial** — the orbit seen nearly edge-on, with the Sun above or below
+   the orbit plane according to beta angle. Earth and the Sun are drawn not to scale, and
+   the orbit radius is compressed so the spacecraft stays visible.
+2. **Satellite close-up** — the satellite filling the frame, either body-fixed (the
+   satellite is stationary and the Sun arrow sweeps) or velocity-fixed.
+3. **Sun viewpoint** — an orthographic camera parked at the Sun, looking back along the Sun
+   line at the Earth. This is what the Sun sees: a panel square to the Sun shows its full
+   rectangle, a panel edge-on to the Sun collapses to a line. Unlike the first scene, the
+   Earth and the orbit are drawn at the same scale, and the camera is orthographic because
+   the real Sun's rays are parallel across the orbit. The Earth's silhouette is therefore
+   the actual eclipse boundary: the satellite slips behind the disk exactly when the
+   simulation puts it in eclipse (`test_sun_view_silhouette_matches_simulated_eclipse`
+   checks this against the simulated illumination).
+
+All three scenes share the Play/Pause control, the time slider, and the display checkboxes.
+
 The Frames tab plots the legal Sun-tracking target against the actual gimbal angle(s) for
 every limited axis and marks rewind intervals (primary axis, cable-wrap mode only). The
 model does not currently optimize rewind timing around eclipse; a rewind begins when

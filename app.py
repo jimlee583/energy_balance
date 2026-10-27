@@ -1077,6 +1077,12 @@ def _render_seasonal(cfg: SimulationConfig) -> None:
 # Frames tab helpers
 # --------------------------------------------------------------------------------------
 
+# Play loops the chosen orbit by queueing its frames repeatedly, so these bound
+# how long one press keeps running: roughly LOOP_TARGET_SECONDS of playback, or
+# fewer passes if that many frame names would bloat the figure.
+LOOP_TARGET_SECONDS = 1800.0
+LOOP_MAX_FRAME_STEPS = 30000
+
 
 def _orbit_display_rotation(h_eci: np.ndarray, u_sun_eci: np.ndarray) -> np.ndarray:
     """Return an ECI-to-display rotation for an edge-on beta-angle view.
@@ -1729,6 +1735,11 @@ def _render_frames(df: pd.DataFrame) -> None:
         "the Earth and the orbit are drawn to the same scale here, so the satellite passes "
         "behind the Earth's disk precisely when it enters eclipse."
     )
+    st.caption(
+        "Each scene carries its own Play/Pause pair, since the figure is taller than the "
+        "window. They all drive the same animation: Play restarts the chosen orbit and then "
+        "repeats it until Pause is pressed."
+    )
 
     # ------------------------------------------------------------------
     # Controls
@@ -2143,14 +2154,51 @@ def _render_frames(df: pd.DataFrame) -> None:
         showbackground=False, showspikes=False, showline=False, ticks="",
     )
 
-    play_args = [None, dict(
+    # Plotly's animate has no repeat option, so looping means handing Play an
+    # explicit frame list that already contains the orbit many times over.
+    # Size it by wall-clock playback time rather than a fixed repeat count, so
+    # a slow frame rate does not cut the loop short, and cap the list length so
+    # the extra names stay small next to the frame payload itself.
+    orbit_playback_s = max(K * frame_ms / 1000.0, 0.1)
+    loop_passes = max(1, int(np.ceil(LOOP_TARGET_SECONDS / orbit_playback_s)))
+    loop_passes = min(loop_passes, max(1, LOOP_MAX_FRAME_STEPS // K))
+    loop_frame_names = [str(k) for k in range(K)] * loop_passes
+
+    # An explicit frame list always starts at its first entry, so Play restarts
+    # the orbit rather than resuming from the slider's position.
+    play_args = [loop_frame_names, dict(
         frame=dict(duration=frame_ms, redraw=True),
-        transition=dict(duration=0), fromcurrent=True, mode="immediate",
+        transition=dict(duration=0), mode="immediate",
     )]
+    # "immediate" flushes whatever is still queued, so Pause stops the loop
+    # instead of letting the remaining passes drain.
     pause_args = [[None], dict(
         frame=dict(duration=0, redraw=False),
         transition=dict(duration=0), mode="immediate",
     )]
+
+    def _play_pause_menu(y: float) -> dict:
+        """Play/Pause buttons anchored just above one scene.
+
+        Each of the three stacked scenes gets its own copy: the figure is far
+        taller than the viewport, so a single control row at the top is out of
+        sight once the reader scrolls to a lower scene. All copies drive the
+        same animation.
+        """
+        return dict(
+            type="buttons",
+            direction="right",
+            showactive=False,
+            x=0.0,
+            y=y,
+            xanchor="left",
+            yanchor="top",
+            pad=dict(t=0, b=0, l=0, r=8),
+            buttons=[
+                dict(label="Play", method="animate", args=play_args),
+                dict(label="Pause", method="animate", args=pause_args),
+            ],
+        )
 
     fig.update_layout(
         title=_figure_title(0),
@@ -2204,20 +2252,14 @@ def _render_frames(df: pd.DataFrame) -> None:
             ),
             xaxis=blank_axis_s3, yaxis=blank_axis_s3, zaxis=blank_axis_s3,
         ),
-        updatemenus=[dict(
-            type="buttons",
-            direction="right",
-            showactive=False,
-            x=0.0,
-            y=0.965,
-            xanchor="left",
-            yanchor="top",
-            pad=dict(t=0, b=0, l=0, r=8),
-            buttons=[
-                dict(label="Play", method="animate", args=play_args),
-                dict(label="Pause", method="animate", args=pause_args),
-            ],
-        )],
+        # One control row per scene, each sitting in the gap above its own
+        # subplot label. The labels are centered and these are left-anchored,
+        # so they do not collide.
+        updatemenus=[
+            _play_pause_menu(0.965),
+            _play_pause_menu(scene2_top + 0.025),
+            _play_pause_menu(scene3_top + 0.025),
+        ],
         sliders=[dict(
             active=0, pad=dict(t=40, b=10), x=0.08, len=0.9,
             currentvalue=dict(prefix="t = ", font=dict(size=12)),

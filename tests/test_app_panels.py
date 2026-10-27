@@ -9,10 +9,13 @@ from app import (
     _default_wing_side_axis,
     _orbit_display_rotation,
     _solar_array_summary,
+    _sun_display_rotation,
     _symmetric_wing_panels,
     _velocity_fixed_display_rotation,
 )
-from energy_balance import PanelConfig, PanelMounting, SolarArrayConfig
+from energy_balance import PanelConfig, PanelMounting, SolarArrayConfig, run_simulation
+from energy_balance.config import preset_configs
+from energy_balance.eclipse import R_EARTH_KM
 
 
 @pytest.mark.parametrize("beta_deg", [-35.0, 0.0, 42.0])
@@ -65,6 +68,77 @@ def test_velocity_fixed_display_rotation_holds_velocity_along_positive_x():
         [0.0, 0.0, 1.0],
         atol=1e-12,
     )
+
+
+@pytest.mark.parametrize("beta_deg", [-62.0, -15.0, 0.0, 28.0, 77.0])
+def test_sun_display_rotation_puts_sun_on_positive_z(beta_deg):
+    beta = np.deg2rad(beta_deg)
+    orbit_normal = np.array([-0.3, 0.5, 0.6])
+    orbit_normal /= np.linalg.norm(orbit_normal)
+    in_plane = np.array([0.7, 0.1, -0.2])
+    in_plane -= np.dot(in_plane, orbit_normal) * orbit_normal
+    in_plane /= np.linalg.norm(in_plane)
+    sun = np.cos(beta) * in_plane + np.sin(beta) * orbit_normal
+
+    rotation = _sun_display_rotation(sun, orbit_normal)
+
+    np.testing.assert_allclose(rotation @ rotation.T, np.eye(3), atol=1e-12)
+    assert np.linalg.det(rotation) == pytest.approx(1.0)
+    # The Sun sits on display +Z, i.e. straight behind a camera on the +Z axis.
+    np.testing.assert_allclose(rotation @ sun, [0.0, 0.0, 1.0], atol=1e-12)
+    # The orbit normal keeps its tilt in the display Y-Z plane, which is what
+    # holds the orbit's apparent attitude steady across frames.
+    normal_display = rotation @ orbit_normal
+    assert normal_display[0] == pytest.approx(0.0, abs=1e-12)
+    assert normal_display[1] >= 0.0
+
+
+def test_sun_display_rotation_is_stable_at_polar_sun():
+    orbit_normal = np.array([0.0, 0.0, 1.0])
+
+    rotation = _sun_display_rotation(orbit_normal, orbit_normal)
+
+    np.testing.assert_allclose(rotation @ rotation.T, np.eye(3), atol=1e-12)
+    assert np.linalg.det(rotation) == pytest.approx(1.0)
+    np.testing.assert_allclose(rotation @ orbit_normal, [0.0, 0.0, 1.0], atol=1e-12)
+
+
+@pytest.mark.parametrize(
+    "preset_name", ["ISS-like LEO (420 km, 51.6 deg)", "LEO 1000 km, 80 deg"]
+)
+def test_sun_view_silhouette_matches_simulated_eclipse(preset_name):
+    """The Sun-viewpoint scene must hide the satellite exactly during eclipse.
+
+    The scene draws the Earth to scale under an orthographic camera on the Sun
+    line, so "behind the Earth's disk" is a real eclipse test: the satellite is
+    inside the silhouette if and only if the simulation reports it eclipsed.
+    """
+    config = preset_configs()[preset_name]
+    df = run_simulation(config)
+
+    first_orbit = df["orbit_number"].to_numpy() == 0
+    r_eci = np.asarray(df.attrs["r_eci_km"])[first_orbit]
+    v_eci = np.asarray(df.attrs["v_eci_km_s"])[first_orbit]
+    sun_eci = np.asarray(df.attrs["sun_eci_km"])[first_orbit]
+    u_sun = sun_eci / np.linalg.norm(sun_eci, axis=-1, keepdims=True)
+    illumination = df["illumination"].to_numpy()[first_orbit]
+
+    h_eci = np.cross(r_eci, v_eci)
+    h_hat = h_eci / np.linalg.norm(h_eci, axis=-1, keepdims=True)
+    h_ref = h_hat.mean(axis=0)
+    h_ref /= np.linalg.norm(h_ref)
+
+    # The same mid-orbit, fixed-camera rotation the Frames tab builds.
+    rotation = _sun_display_rotation(u_sun[len(u_sun) // 2], h_ref)
+    r_display = (rotation @ r_eci.T).T
+
+    off_axis_km = np.hypot(r_display[:, 0], r_display[:, 1])
+    anti_sunward = r_display[:, 2] < 0.0
+    inside_silhouette = anti_sunward & (off_axis_km < R_EARTH_KM)
+
+    eclipsed = illumination < 0.5
+    assert eclipsed.any(), "preset should spend part of the orbit in eclipse"
+    np.testing.assert_array_equal(inside_silhouette, eclipsed)
 
 
 @pytest.mark.parametrize(

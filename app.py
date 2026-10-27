@@ -1130,6 +1130,34 @@ def _velocity_fixed_display_rotation(
     return np.stack((x_axis, y_axis, z_axis), axis=0)
 
 
+def _sun_display_rotation(u_sun_eci: np.ndarray, h_eci: np.ndarray) -> np.ndarray:
+    """Return an ECI-to-display rotation that puts the Sun on display +Z.
+
+    A camera parked on the display +Z axis looking back at the origin then sits
+    at the Sun, so the scene shows exactly the face of the Earth, the orbit and
+    the satellite that the Sun illuminates. Display +Y follows the component of
+    the orbit normal perpendicular to the Sun line, which keeps the orbit's
+    apparent tilt stable from frame to frame.
+    """
+    z_axis = np.asarray(u_sun_eci, dtype=float)
+    z_axis /= max(float(np.linalg.norm(z_axis)), 1e-12)
+
+    h = np.asarray(h_eci, dtype=float)
+    y_axis = h - float(np.dot(h, z_axis)) * z_axis
+    y_norm = float(np.linalg.norm(y_axis))
+    if y_norm < 1e-9:
+        # At beta ~= +/-90 deg the orbit normal lies along the Sun line and has
+        # no perpendicular component. Choose the least-aligned ECI axis so the
+        # view stays deterministic.
+        fallback = np.eye(3)[int(np.argmin(np.abs(z_axis)))]
+        y_axis = fallback - float(np.dot(fallback, z_axis)) * z_axis
+        y_norm = float(np.linalg.norm(y_axis))
+    y_axis /= max(y_norm, 1e-12)
+    x_axis = np.cross(y_axis, z_axis)
+    x_axis /= max(float(np.linalg.norm(x_axis)), 1e-12)
+    return np.stack((x_axis, y_axis, z_axis), axis=0)
+
+
 def _unit_cube() -> tuple[np.ndarray, np.ndarray]:
     """Return (vertices, triangle indices) for a unit cube centered at the origin."""
     v = np.array(
@@ -1697,6 +1725,14 @@ def _render_frames(df: pd.DataFrame) -> None:
         "faces and draw each array's gimbal rotation axis (one line for 1-axis tracking, two for "
         "2-axis tracking)."
     )
+    st.caption(
+        "The third scene is the Sun's viewpoint: an orthographic camera parked at the Sun, "
+        "looking back along the Sun line at the Earth. It shows the orbit and the satellite "
+        "exactly as the Sun sees them, so a panel that is square to the Sun shows its full "
+        "rectangle and a panel that is edge-on collapses to a line. Unlike the top scene, "
+        "the Earth and the orbit are drawn to the same scale here, so the satellite passes "
+        "behind the Earth's disk precisely when it enters eclipse."
+    )
 
     # ------------------------------------------------------------------
     # Controls
@@ -1717,7 +1753,11 @@ def _render_frames(df: pd.DataFrame) -> None:
     )
 
     ck = st.columns(4)
-    show_trail = ck[0].checkbox("Orbit trail (top scene)", value=True)
+    show_trail = ck[0].checkbox(
+        "Orbit trail (orbit scenes)", value=True,
+        help="Draw a short trail behind the satellite in the Earth-centered and "
+             "Sun-viewpoint scenes.",
+    )
     show_axes = ck[1].checkbox("Body axes", value=True)
     show_sun = ck[2].checkbox("Sun arrow at satellite", value=True)
     show_panel_normals = ck[3].checkbox("Panel normals", value=True)
@@ -1778,6 +1818,15 @@ def _render_frames(df: pd.DataFrame) -> None:
     orbit_display_scale = 0.72
     r_display_k = orbit_display_scale * (display_rot @ r_k.T).T
 
+    # Sun viewpoint: a fixed camera on the Sun line, built from the mid-orbit
+    # Sun direction. The Sun moves only ~0.004 deg over one low-Earth orbit, so
+    # holding the camera still is accurate and keeps the orbit path static while
+    # the satellite travels along it. This scene keeps the orbit at true scale
+    # against the Earth so entering eclipse really is the satellite slipping
+    # behind the Earth's disk.
+    sun_rot = _sun_display_rotation(u_sun_k[K // 2], h_display_ref)
+    r_sun_view_k = (sun_rot @ r_k.T).T
+
     # Panel geometry comes from the full simulation so twist-limited gimbals
     # retain their state across orbit and animation slices.
     normal_eci_k = np.asarray(df.attrs["panel_normal_eci"])[:, frame_indices, :]
@@ -1814,6 +1863,13 @@ def _render_frames(df: pd.DataFrame) -> None:
     sat_scale_s2 = 1.0
     arrow_len_s2 = 3.0
     sun_arrow_len_s2 = 4.5
+
+    # Same exaggerated satellite size as scene 1, so the two orbit-scale views
+    # stay comparable; the Sun view is framed tighter, so it already shows the
+    # spacecraft somewhat larger.
+    sat_scale_s3 = sat_scale_s1
+    arrow_len_s3 = 0.22 * orbit_radius
+    sun_arrow_len_s3 = 0.14 * orbit_radius
 
     # ------------------------------------------------------------------
     # Static scene 1 content (Earth, full-orbit path, static Sun marker)
@@ -1864,6 +1920,50 @@ def _render_frames(df: pd.DataFrame) -> None:
     )
 
     # ------------------------------------------------------------------
+    # Static scene 3 content (Sun viewpoint: Earth and orbit, both to scale)
+    # ------------------------------------------------------------------
+    # Finer mesh than scene 1: this camera looks straight down the sphere's
+    # pole, where a coarse grid shows as concentric rings at the disk centre.
+    phi3 = np.linspace(0, np.pi, 61)
+    theta3 = np.linspace(0, 2 * np.pi, 90)
+    th3_grid, ph3_grid = np.meshgrid(theta3, phi3)
+    xe3 = float(R_EARTH_KM) * np.sin(ph3_grid) * np.cos(th3_grid)
+    ye3 = float(R_EARTH_KM) * np.sin(ph3_grid) * np.sin(th3_grid)
+    ze3 = float(R_EARTH_KM) * np.cos(ph3_grid)
+    # Opaque, unlike scene 1: the Earth has to actually hide the satellite for
+    # the eclipse cue in this projection to work. Display +Z is the Sun line, so
+    # z/R is the cosine of the solar incidence angle on the globe; shading by it
+    # puts a bright sub-solar point at the middle of the disk and darkens the
+    # limb, which is how the Earth should look from the Sun's side. Only the
+    # near hemisphere is ever visible, so the clipped far side never shows.
+    earth_lambert_s3 = np.clip(ze3 / float(R_EARTH_KM), 0.0, 1.0)
+    static_s3: list[go.BaseTraceType] = [
+        go.Surface(
+            x=xe3, y=ye3, z=ze3,
+            surfacecolor=earth_lambert_s3, cmin=0.0, cmax=1.0,
+            colorscale=[[0.0, "#0b2545"], [0.5, "#1f6fb4"], [1.0, "#9ecbf0"]],
+            opacity=1.0, showscale=False,
+            # Flat lighting: the surfacecolor above already carries the solar
+            # shading, so Plotly's own camera-relative lighting would only add
+            # a second, physically wrong light source.
+            lighting=dict(ambient=1.0, diffuse=0.0, specular=0.0, fresnel=0.0),
+            name="Earth (to scale)", hoverinfo="name", scene="scene3",
+        )
+    ]
+    if len(r_orbit_full) > 1:
+        r_orbit_sun_view = (sun_rot @ r_orbit_full.T).T
+        static_s3.append(
+            go.Scatter3d(
+                x=r_orbit_sun_view[:, 0],
+                y=r_orbit_sun_view[:, 1],
+                z=r_orbit_sun_view[:, 2],
+                mode="lines", line=dict(color="orange", width=3),
+                name=f"Orbit {orbit_sel}", hoverinfo="name", scene="scene3",
+                showlegend=False,
+            )
+        )
+
+    # ------------------------------------------------------------------
     # Build per-frame animated traces
     # ------------------------------------------------------------------
     flags_s1 = {
@@ -1879,8 +1979,11 @@ def _render_frames(df: pd.DataFrame) -> None:
     }
     trail_window = max(1, K // 8)
 
-    def _frame_traces(k: int) -> tuple[list[go.BaseTraceType], list[go.BaseTraceType]]:
+    def _frame_traces(
+        k: int,
+    ) -> tuple[list[go.BaseTraceType], list[go.BaseTraceType], list[go.BaseTraceType]]:
         trail = r_display_k[max(0, k - trail_window):k + 1] if show_trail else None
+        trail_s3 = r_sun_view_k[max(0, k - trail_window):k + 1] if show_trail else None
         s1 = _satellite_frame_traces(
             center=r_display_k[k],
             rot_display=display_rot @ rot_k[k],
@@ -1931,12 +2034,35 @@ def _render_frames(df: pd.DataFrame) -> None:
             trail_display=None,
             draw_solar_rays=(close_up_mode == "Velocity-fixed"),
         )
-        return s1, s2
+        s3 = _satellite_frame_traces(
+            center=r_sun_view_k[k],
+            rot_display=sun_rot @ rot_k[k],
+            sat_scale=sat_scale_s3,
+            cfg=cfg,
+            panel_normal_body=normal_body_k[:, k, :],
+            panel_edge_body=edge_body_k[:, k, :],
+            panel_cos=cos_k[:, k],
+            illum=float(illum_k[k]),
+            sun_body=sun_body_k[k],
+            vel_body=vel_body_k[k],
+            nadir_body=nadir_body_k[k],
+            hhat_body=hhat_body_k[k],
+            arrow_len=arrow_len_s3,
+            sun_arrow_len=sun_arrow_len_s3,
+            flags=flags_s1,
+            scene="scene3",
+            panel_plate_scale=1.0,
+            boom_width=4,
+            trail_display=trail_s3,
+        )
+        return s1, s2, s3
 
-    s1_0, s2_0 = _frame_traces(0)
-    initial_data = static_s1 + s1_0 + s2_0
-    animated_start = len(static_s1)
-    animated_indices = list(range(animated_start, animated_start + len(s1_0) + len(s2_0)))
+    s1_0, s2_0, s3_0 = _frame_traces(0)
+    static_data = static_s1 + static_s3
+    initial_data = static_data + s1_0 + s2_0 + s3_0
+    animated_start = len(static_data)
+    animated_count = len(s1_0) + len(s2_0) + len(s3_0)
+    animated_indices = list(range(animated_start, animated_start + animated_count))
 
     def _title_for(k: int) -> str:
         ts = pd.Timestamp(timestamp_k[k])
@@ -1961,26 +2087,27 @@ def _render_frames(df: pd.DataFrame) -> None:
 
     frames: list[go.Frame] = []
     for k in range(K):
-        s1, s2 = _frame_traces(k)
+        s1, s2, s3 = _frame_traces(k)
         frames.append(
             go.Frame(
                 name=str(k),
-                data=s1 + s2,
+                data=s1 + s2 + s3,
                 traces=animated_indices,
                 layout=go.Layout(title=_figure_title(k)),
             )
         )
 
     # ------------------------------------------------------------------
-    # Compose the two-scene figure with Play/Pause and a time slider.
+    # Compose the three-scene figure with Play/Pause and a time slider.
     # Stacked (not side-by-side) so each scene gets the full page width.
     # ------------------------------------------------------------------
     fig = make_subplots(
-        rows=2, cols=1,
-        specs=[[{"type": "scene"}], [{"type": "scene"}]],
+        rows=3, cols=1,
+        specs=[[{"type": "scene"}], [{"type": "scene"}], [{"type": "scene"}]],
         subplot_titles=[
             "Earth-centered inertial",
             f"Satellite close-up ({close_up_mode.lower()})",
+            "Sun viewpoint (looking down the Sun line at the Earth)",
         ],
     )
     for tr in initial_data:
@@ -1988,12 +2115,14 @@ def _render_frames(df: pd.DataFrame) -> None:
     fig.frames = tuple(frames)
 
     # Reserve a header at the top of the figure (title, then Play/Pause),
-    # then split the remaining height between the two stacked scenes, each
+    # then split the remaining height between the three stacked scenes, each
     # with its own subplot-label strip just above it.
-    scene1_top, scene1_bottom = 0.94, 0.52
-    scene2_top, scene2_bottom = 0.48, 0.0
+    scene1_top, scene1_bottom = 0.94, 0.655
+    scene2_top, scene2_bottom = 0.625, 0.34
+    scene3_top, scene3_bottom = 0.31, 0.0
     fig.layout.annotations[0].update(y=scene1_top, yanchor="bottom")
     fig.layout.annotations[1].update(y=scene2_top, yanchor="bottom")
+    fig.layout.annotations[2].update(y=scene3_top, yanchor="bottom")
 
     axis_half_s1 = sun_distance_s1 * 1.15
     blank_axis_s1 = dict(
@@ -2006,6 +2135,14 @@ def _render_frames(df: pd.DataFrame) -> None:
     scene_half_s2 = max(arrow_len_s2, sun_arrow_len_s2) * 1.35
     blank_axis_s2 = dict(
         title="", range=[-scene_half_s2, scene_half_s2],
+        showticklabels=False, showgrid=False, zeroline=False,
+        showbackground=False, showspikes=False, showline=False, ticks="",
+    )
+    # The Sun viewpoint frames the orbit itself (no distant Sun marker to fit),
+    # so it only needs room for the orbit plus the satellite's own arrows.
+    axis_half_s3 = orbit_radius + max(arrow_len_s3, 2.0 * sat_scale_s3)
+    blank_axis_s3 = dict(
+        title="", range=[-axis_half_s3, axis_half_s3],
         showticklabels=False, showgrid=False, zeroline=False,
         showbackground=False, showspikes=False, showline=False, ticks="",
     )
@@ -2027,7 +2164,7 @@ def _render_frames(df: pd.DataFrame) -> None:
         # stacked scene's own pixel height is comparable to the full page
         # width, so each one actually fills the width instead of shrinking
         # to a small centered square.
-        height=2800,
+        height=4200,
         # Keep user camera changes through Plotly's animated redraws. Without a
         # stable uirevision, pressing Play restores the original zoom.
         uirevision="frames-camera",
@@ -2053,6 +2190,23 @@ def _render_frames(df: pd.DataFrame) -> None:
                 center=dict(x=0, y=0, z=0),
             ),
             xaxis=blank_axis_s2, yaxis=blank_axis_s2, zaxis=blank_axis_s2,
+        ),
+        scene3=dict(
+            aspectmode="cube", bgcolor="rgba(0,0,0,0)",
+            uirevision="frames-camera",
+            domain=dict(x=[0.0, 1.0], y=[scene3_bottom, scene3_top]),
+            # The camera sits on display +Z, which _sun_display_rotation put
+            # along the Sun line, so this is literally the Sun's line of sight.
+            # Orthographic, because the real Sun is far enough away that its
+            # rays are parallel across the orbit -- that is also what makes the
+            # Earth's silhouette here the actual eclipse boundary.
+            camera=dict(
+                eye=dict(x=0.0, y=0.0, z=1.6),
+                up=dict(x=0, y=1, z=0),
+                center=dict(x=0, y=0, z=0),
+                projection=dict(type="orthographic"),
+            ),
+            xaxis=blank_axis_s3, yaxis=blank_axis_s3, zaxis=blank_axis_s3,
         ),
         updatemenus=[dict(
             type="buttons",
